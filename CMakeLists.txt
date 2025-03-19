@@ -21,8 +21,8 @@ include_directories(${glog_SOURCE_DIR}/src)
 include_directories(${PROJECT_SOURCE_DIR})
 file(GLOB_RECURSE SRC ${PROJECT_SOURCE_DIR}/infini_train/src/*.cc)
 add_library(infini_train STATIC ${SRC})
-target_link_libraries(infini_train glog gflags gtest)
+target_link_libraries(infini_train glog gflags)
 
 # Examples
 add_executable(mnist example/mnist/main.cc)
-target_link_libraries(mnist glog gflags gtest infini_train)
+target_link_libraries(mnist glog gflags infini_train)
