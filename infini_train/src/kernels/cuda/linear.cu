@@ -53,6 +53,7 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
 
     const float alpha = 1.0f, beta = 0.0f;
     cublasHandle_t handle;
+    // TODO(zbl): create handle only once
     CUBLAS_CHECK(cublasCreate(&handle));
 
     // cuBLAS is colmun-major

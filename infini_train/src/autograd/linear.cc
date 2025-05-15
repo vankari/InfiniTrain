@@ -13,10 +13,10 @@
 
 namespace infini_train::autograd {
 std::vector<std::shared_ptr<Tensor>> Linear::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
-    CHECK_EQ(input_tensors.size(), 3);
+    CHECK_GE(input_tensors.size(), 2);
     const auto &input = input_tensors[0];
     const auto &weight = input_tensors[1];
-    const auto &bias = input_tensors[2];
+    const auto &bias = input_tensors.size() == 3 ? input_tensors[2] : nullptr;
 
     std::shared_ptr<Tensor> output = nullptr;
     switch (input->GetDevice().Type()) {
@@ -42,8 +42,8 @@ void Linear::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tens
     const auto &input = input_tensors[0];
     const auto &weight = input_tensors[1];
     saved_tensors_ = {input, weight};
-    const auto &bias = input_tensors[2];
-    out_features_ = bias->Dims()[0];
+    bias_ = input_tensors.size() == 3;
+    out_features_ = weight->Dims()[0];
 }
 
 std::vector<std::shared_ptr<Tensor>> Linear::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
@@ -56,14 +56,16 @@ std::vector<std::shared_ptr<Tensor>> Linear::Backward(const std::vector<std::sha
     switch (input->GetDevice().Type()) {
     case DeviceType::kCPU: {
         auto [grad_input, grad_weight, grad_bias]
-            = kernels::cpu::LinearBackward(input, weight, true, out_features_, grad_output);
-        return {grad_input, grad_weight, grad_bias};
+            = kernels::cpu::LinearBackward(input, weight, true, out_features_, grad_output, bias_);
+        return bias_ ? std::vector<std::shared_ptr<Tensor>>{grad_input, grad_weight, grad_bias}
+                     : std::vector<std::shared_ptr<Tensor>>{grad_input, grad_weight};
     }
 #ifdef USE_CUDA
     case DeviceType::kCUDA: {
         auto [grad_input, grad_weight, grad_bias]
-            = kernels::cuda::LinearBackward(input, weight, true, out_features_, grad_output, true);
-        return {grad_input, grad_weight, grad_bias};
+            = kernels::cuda::LinearBackward(input, weight, true, out_features_, grad_output, bias_);
+        return bias_ ? std::vector<std::shared_ptr<Tensor>>{grad_input, grad_weight, grad_bias}
+                     : std::vector<std::shared_ptr<Tensor>>{grad_input, grad_weight};
     }
 #endif
     default:

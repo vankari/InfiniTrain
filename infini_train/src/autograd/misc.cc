@@ -8,11 +8,13 @@
 #include "infini_train/include/kernels/cpu/no_op.h"
 #include "infini_train/include/kernels/cpu/slice.h"
 #include "infini_train/include/kernels/cpu/split.h"
+#include "infini_train/include/kernels/cpu/stack.h"
 #include "infini_train/include/tensor.h"
 #ifdef USE_CUDA
 #include "infini_train/include/kernels/cuda/no_op.h"
 #include "infini_train/include/kernels/cuda/slice.h"
 #include "infini_train/include/kernels/cuda/split.h"
+#include "infini_train/include/kernels/cuda/stack.h"
 #endif
 
 namespace infini_train::autograd {
@@ -169,5 +171,55 @@ std::vector<std::shared_ptr<Tensor>> Slice::Backward(const std::vector<std::shar
         break;
     }
     return {grad_input};
+}
+
+std::vector<std::shared_ptr<Tensor>> Stack::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
+    CHECK_GE(input_tensors.size(), 2);
+    const auto device = input_tensors[0]->GetDevice();
+    std::shared_ptr<Tensor> output = nullptr;
+
+    switch (device.Type()) {
+    case DeviceType::kCPU: {
+        output = kernels::cpu::StackForward(input_tensors, dim_);
+        return {output};
+    }
+#ifdef USE_CUDA
+    case DeviceType::kCUDA: {
+        output = kernels::cuda::StackForward(input_tensors, dim_);
+        return {output};
+    }
+#endif
+    default:
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(device.Type());
+        break;
+    }
+    return {output};
+}
+
+void Stack::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
+                         const std::vector<std::shared_ptr<Tensor>> &) {
+    const auto &input = input_tensors[0];
+    input_dims_ = input->Dims();
+}
+
+std::vector<std::shared_ptr<Tensor>> Stack::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
+    const auto &grad_output = grad_outputs[0];
+
+    switch (grad_output->GetDevice().Type()) {
+    case DeviceType::kCPU: {
+        auto grad_inputs = kernels::cpu::StackBackward(input_dims_, dim_, grad_output);
+        return grad_inputs;
+    }
+#ifdef USE_CUDA
+    case DeviceType::kCUDA: {
+        auto grad_inputs = kernels::cuda::StackBackward(input_dims_, dim_, grad_output);
+        return grad_inputs;
+    }
+#endif
+    default:
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(grad_output->GetDevice().Type());
+        break;
+    }
+    return {};
 }
 } // namespace infini_train::autograd

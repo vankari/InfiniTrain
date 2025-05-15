@@ -25,14 +25,31 @@ __global__ void UnaryForwardKernel(T *output, Func fn, size_t num_elements, size
     }
 }
 
-template <typename T, typename Func>
-__global__ void BinaryForwardKernel(T *output, Func fn, size_t num_elements_a, size_t num_elements_b, size_t offset,
-                                    const T *a, const T *b) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x + offset;
-
-    if (idx < num_elements_a) {
-        output[idx] = fn(a[idx], b[idx % num_elements_b]);
+// Helper for broadcast indexing
+__device__ inline int64_t calc_offset(int64_t idx, int ndim, const int64_t *strides, const int64_t *shape,
+                                      const int64_t *out_strides) {
+    int64_t offset = 0;
+    for (int i = 0; i < ndim; ++i) {
+        int64_t out_index = (idx / out_strides[i]) % shape[i];
+        int64_t index = shape[i] == 1 ? 0 : out_index;
+        offset += index * strides[i];
     }
+    return offset;
+}
+
+template <typename T, typename Func>
+__global__ void BinaryForwardKernel(T *output, Func fn, int ndim, const int64_t *a_strides, const int64_t *a_shape,
+                                    const int64_t *b_strides, const int64_t *b_shape, const int64_t *out_strides,
+                                    const T *a, const T *b, size_t num_elements) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_elements) {
+        return;
+    }
+
+    int64_t a_offset = calc_offset(idx, ndim, a_strides, a_shape, out_strides);
+    int64_t b_offset = calc_offset(idx, ndim, b_strides, b_shape, out_strides);
+
+    output[idx] = fn(a[a_offset], b[b_offset]);
 }
 
 // launch the given kernel function with the given output and inputs
@@ -55,6 +72,13 @@ void LaunchKernel(Kernel &&kernel, const std::shared_ptr<Tensor> &output, const 
     }
 }
 
+// Helper for stride calculation
+std::vector<int64_t> ComputeStride(const std::vector<int64_t> &dims) {
+    std::vector<int64_t> strides(dims.size(), 1);
+    for (int i = dims.size() - 2; i >= 0; --i) { strides[i] = strides[i + 1] * dims[i + 1]; }
+    return strides;
+}
+
 // launch a forward elementwise operation given the calculation function, output, and the inputs
 // Note: currently only support unary and binary operations
 template <size_t BLOCK_SIZE, typename T, typename Func, typename... Inputs>
@@ -74,10 +98,38 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
         const auto &input_a = std::get<0>(input_tuple);
         const auto &input_b = std::get<1>(input_tuple);
 
+        const auto &a_dims = input_a->Dims();
+        const auto &b_dims = input_b->Dims();
+        const auto &out_dims = output->Dims();
+        int ndim = out_dims.size();
+
+        std::vector<int64_t> a_shape(ndim, 1), b_shape(ndim, 1), out_shape(ndim, 1);
+        std::copy_backward(a_dims.begin(), a_dims.end(), a_shape.end());
+        std::copy_backward(b_dims.begin(), b_dims.end(), b_shape.end());
+        std::copy_backward(out_dims.begin(), out_dims.end(), out_shape.end());
+
+        auto a_stride_host = ComputeStride(a_shape);
+        auto b_stride_host = ComputeStride(b_shape);
+        auto out_stride_host = ComputeStride(out_shape);
+
+        int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
+        cudaMalloc(&device_a_strides, ndim * sizeof(int64_t));
+        cudaMalloc(&device_b_strides, ndim * sizeof(int64_t));
+        cudaMalloc(&device_out_strides, ndim * sizeof(int64_t));
+        cudaMalloc(&device_a_shape, ndim * sizeof(int64_t));
+        cudaMalloc(&device_b_shape, ndim * sizeof(int64_t));
+
+        cudaMemcpy(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+        cudaMemcpy(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+        cudaMemcpy(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+        cudaMemcpy(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+        cudaMemcpy(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+
         LaunchKernel<BLOCK_SIZE, T>(
             [&](dim3 grid, dim3 block, size_t offset, const T *a_ptr, const T *b_ptr) {
-                BinaryForwardKernel<<<grid, block>>>(output_ptr, func, input_a->NumElements(), input_b->NumElements(),
-                                                     offset, a_ptr, b_ptr);
+                BinaryForwardKernel<<<grid, block>>>(output_ptr, func, ndim, device_a_strides, device_a_shape,
+                                                     device_b_strides, device_b_shape, device_out_strides, a_ptr, b_ptr,
+                                                     output->NumElements());
             },
             output, inputs...);
     } else {
@@ -99,17 +151,23 @@ __global__ void UnaryBackwardKernel(T *output, Func fn, size_t num_elements, siz
 
 // Backward kernel for binary operators
 template <typename T, typename FuncA, typename FuncB>
-__global__ void BinaryBackwardKernel(T *output_a, T *output_b, FuncA fun_a, FuncB fun_b, int64_t a_num_elements,
-                                     int64_t b_num_elements, size_t offset, const T *grad_output, const T *input_a,
-                                     const T *input_b) {
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x + offset;
-
-    if (idx < a_num_elements) {
-        const T &a = input_a ? input_a[idx] : T(0);
-        const T &b = input_b ? input_b[idx % b_num_elements] : T(0);
-        output_a[idx] = grad_output[idx] * fun_a(a, b);
-        atomicAdd(&output_b[idx % b_num_elements], grad_output[idx] * fun_b(a, b));
+__global__ void BinaryBackwardKernel(T *output_a, T *output_b, FuncA fn_a, FuncB fn_b, int ndim, size_t num_elements,
+                                     const int64_t *a_strides, const int64_t *a_shape, const int64_t *b_strides,
+                                     const int64_t *b_shape, const int64_t *out_strides, const T *grad_output,
+                                     const T *input_a, const T *input_b) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_elements) {
+        return;
     }
+
+    int64_t a_offset = calc_offset(idx, ndim, a_strides, a_shape, out_strides);
+    int64_t b_offset = calc_offset(idx, ndim, b_strides, b_shape, out_strides);
+
+    const T a_val = input_a ? input_a[a_offset] : T(0);
+    const T b_val = input_b ? input_b[b_offset] : T(0);
+
+    output_a[a_offset] = grad_output[idx] * fn_a(a_val, b_val);
+    atomicAdd(&output_b[b_offset], grad_output[idx] * fn_b(a_val, b_val));
 }
 
 // launch unary operator's backward kernel
@@ -129,17 +187,52 @@ void LaunchBackward(Func func, const std::shared_ptr<Tensor> &output, const std:
 // launch binary operator's backward kernel
 template <size_t BLOCK_SIZE, typename T, typename FuncA, typename FuncB, typename... Inputs>
 void LaunchBackward(FuncA fun_a, FuncB fun_b, const std::shared_ptr<Tensor> &output_a,
-                    const std::shared_ptr<Tensor> &output_b, int64_t a_num_elements, int64_t b_num_elements,
-                    const std::shared_ptr<Tensor> &grad_output, const Inputs &...inputs) {
+                    const std::shared_ptr<Tensor> &output_b, const std::vector<int64_t> &a_dims,
+                    const std::vector<int64_t> &b_dims, const std::shared_ptr<Tensor> &grad_output,
+                    const Inputs &...inputs) {
     T *output_a_ptr = static_cast<T *>(output_a->DataPtr());
     T *output_b_ptr = static_cast<T *>(output_b->DataPtr());
     const T *grad_output_ptr = static_cast<const T *>(grad_output->DataPtr());
+
+    const auto &out_dims = grad_output->Dims();
+    int ndim = out_dims.size();
+
+    std::vector<int64_t> a_shape(ndim, 1), b_shape(ndim, 1), out_shape(ndim, 1);
+    std::copy_backward(a_dims.begin(), a_dims.end(), a_shape.end());
+    std::copy_backward(b_dims.begin(), b_dims.end(), b_shape.end());
+    std::copy_backward(out_dims.begin(), out_dims.end(), out_shape.end());
+
+    auto a_stride_host = ComputeStride(a_shape);
+    auto b_stride_host = ComputeStride(b_shape);
+    auto out_stride_host = ComputeStride(out_shape);
+
+    int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
+    cudaMalloc(&device_a_strides, ndim * sizeof(int64_t));
+    cudaMalloc(&device_b_strides, ndim * sizeof(int64_t));
+    cudaMalloc(&device_out_strides, ndim * sizeof(int64_t));
+    cudaMalloc(&device_a_shape, ndim * sizeof(int64_t));
+    cudaMalloc(&device_b_shape, ndim * sizeof(int64_t));
+
+    cudaMemcpy(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
+
+    const size_t num_elements = grad_output->NumElements();
     LaunchKernel<BLOCK_SIZE, T>(
         [=](dim3 grid, dim3 block, size_t offset, auto... ptrs) {
-            BinaryBackwardKernel<<<grid, block>>>(output_a_ptr, output_b_ptr, fun_a, fun_b, a_num_elements,
-                                                  b_num_elements, offset, grad_output_ptr, ptrs...);
+            BinaryBackwardKernel<<<grid, block>>>(output_a_ptr, output_b_ptr, fun_a, fun_b, ndim, num_elements,
+                                                  device_a_strides, device_a_shape, device_b_strides, device_b_shape,
+                                                  device_out_strides, grad_output_ptr, ptrs...);
         },
         output_a, inputs...);
+
+    cudaFree(device_a_strides);
+    cudaFree(device_b_strides);
+    cudaFree(device_out_strides);
+    cudaFree(device_a_shape);
+    cudaFree(device_b_shape);
 }
 
 template <typename Func> std::shared_ptr<Tensor> UnaryForward(const std::shared_ptr<Tensor> &input, Func unary_fn) {
@@ -222,7 +315,7 @@ BinaryBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr
     grad_b->Fill<float>(0.0f);
     switch (dtype) {
     case DataType::kFLOAT32:
-        LaunchBackward<256, float>(fn_a, fn_b, grad_a, grad_b, a_num_elements, b_num_elements, grad_output, a, b);
+        LaunchBackward<256, float>(fn_a, fn_b, grad_a, grad_b, a_dims, b_dims, grad_output, a, b);
         break;
     default:
         LOG(FATAL) << "CUDA binary backward: 'Unsupported data type' at " << __FILE__ << ":" << __LINE__;
@@ -231,6 +324,39 @@ BinaryBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr
     return {grad_a, grad_b};
 }
 } // namespace
+
+std::shared_ptr<Tensor> NegForward(const std::shared_ptr<Tensor> &input) {
+    return UnaryForward(input, [] __device__(float x) { return -x; });
+}
+
+std::shared_ptr<Tensor> NegBackward(const std::shared_ptr<Tensor> &grad_output) {
+    return UnaryBackward(grad_output, nullptr, [] __device__(float) { return -1.0f; });
+}
+
+std::shared_ptr<Tensor> ReciprocalForward(const std::shared_ptr<Tensor> &input) {
+    return UnaryForward(input, [] __device__(float x) { return 1.0f / x; });
+}
+
+std::shared_ptr<Tensor> ReciprocalBackward(const std::shared_ptr<Tensor> &grad_output,
+                                           const std::shared_ptr<Tensor> &input) {
+    return UnaryBackward(grad_output, input, [] __device__(float x) { return -1.0f / (x * x); });
+}
+
+std::shared_ptr<Tensor> SinForward(const std::shared_ptr<Tensor> &input) {
+    return UnaryForward(input, [] __device__(float x) { return sinf(x); });
+}
+
+std::shared_ptr<Tensor> SinBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input) {
+    return UnaryBackward(grad_output, input, [] __device__(float x) { return cosf(x); });
+}
+
+std::shared_ptr<Tensor> CosForward(const std::shared_ptr<Tensor> &input) {
+    return UnaryForward(input, [] __device__(float x) { return cosf(x); });
+}
+
+std::shared_ptr<Tensor> CosBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input) {
+    return UnaryBackward(grad_output, input, [] __device__(float x) { return -sinf(x); });
+}
 
 std::shared_ptr<Tensor> TanhForward(const std::shared_ptr<Tensor> &input) {
     return UnaryForward(input, [] __device__(float x) { return tanhf(x); });
@@ -241,14 +367,32 @@ std::shared_ptr<Tensor> TanhBackward(const std::shared_ptr<Tensor> &grad_output,
     return UnaryBackward(grad_output, output, [] __device__(float x) { return 1.0 - x * x; });
 }
 
-std::shared_ptr<Tensor> PowForward(const std::shared_ptr<Tensor> &input, float exponent) {
-    return UnaryForward(input, [exponent] __device__(float x) { return powf(x, exponent); });
+std::shared_ptr<Tensor> PowForward(const std::shared_ptr<Tensor> &input, float scalar, bool scalar_is_base) {
+    if (scalar_is_base) {
+        return UnaryForward(input, [scalar] __device__(float x) { return powf(scalar, x); });
+    } else {
+        return UnaryForward(input, [scalar] __device__(float x) { return powf(x, scalar); });
+    }
 }
 
 std::shared_ptr<Tensor> PowBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input,
-                                    float exponent) {
-    return UnaryBackward(grad_output, input,
-                         [exponent] __device__(float x) { return exponent * powf(x, exponent - 1.0f); });
+                                    float scalar, bool scalar_is_base) {
+    if (scalar_is_base) {
+        return UnaryBackward(grad_output, input,
+                             [scalar] __device__(float x) { return logf(scalar) * powf(scalar, x); });
+    } else {
+        return UnaryBackward(grad_output, input,
+                             [scalar] __device__(float x) { return scalar * powf(x, scalar - 1.0f); });
+    }
+}
+
+std::shared_ptr<Tensor> RsqrtForward(const std::shared_ptr<Tensor> &input) {
+    return UnaryForward(input, [] __device__(float x) { return 1.0f / sqrtf(x); });
+}
+
+std::shared_ptr<Tensor> RsqrtBackward(const std::shared_ptr<Tensor> &grad_output,
+                                      const std::shared_ptr<Tensor> &input) {
+    return UnaryBackward(grad_output, input, [] __device__(float x) { return -0.5f / (x * sqrtf(x)); });
 }
 
 std::shared_ptr<Tensor> EqualsScalarForward(const std::shared_ptr<Tensor> &a, float scalar) {
@@ -259,95 +403,12 @@ std::shared_ptr<Tensor> AddForward(const std::shared_ptr<Tensor> &a, const std::
     return BinaryForward(a, b, [] __device__(float x, float y) { return x + y; });
 }
 
-__global__ void AddBackwardReduceKernel(const float *grad_output, float *grad_b, const int64_t *out_strides,
-                                        const int64_t *out_dims, int ndim, const int64_t *b_strides,
-                                        const int64_t *b_dims, int b_ndim, int64_t num_elements) {
-    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_elements) {
-        return;
-    }
-
-    int64_t tmp = idx;
-    int64_t out_index[16]; // Assume ndim < 16
-    for (int i = 0; i < ndim; ++i) {
-        out_index[i] = tmp / out_strides[i];
-        tmp %= out_strides[i];
-    }
-
-    int64_t b_offset = 0;
-    for (int i = 0; i < b_ndim; ++i) {
-        int out_axis = ndim - b_ndim + i;
-        int64_t idx_in_b;
-        if (out_axis < 0 || b_dims[i] == 1) {
-            idx_in_b = 0;
-        } else {
-            idx_in_b = out_index[out_axis];
-        }
-        b_offset += idx_in_b * b_strides[i];
-    }
-
-    atomicAdd(&grad_b[b_offset], grad_output[idx]);
-}
-
 std::pair<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>> AddBackward(const std::shared_ptr<Tensor> &grad_output,
                                                                         const std::vector<int64_t> &a_dims,
                                                                         const std::vector<int64_t> &b_dims) {
-    // TODO(zbl): assume ndim <= 16 here
-    CHECK_LE(grad_output->Dims().size(), 16);
-    CHECK_EQ(a_dims.size(), grad_output->Dims().size());
-
-    auto grad_a = std::make_shared<Tensor>(a_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    cudaMemcpy(grad_a->DataPtr(), grad_output->DataPtr(), grad_output->NumElements() * sizeof(float),
-               cudaMemcpyDeviceToDevice);
-
-    auto grad_b = std::make_shared<Tensor>(b_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    grad_b->Fill<float>(0.0f);
-
-    const auto &out_dims = grad_output->Dims();
-    const int ndim = out_dims.size();
-    const int b_ndim = b_dims.size();
-    const int64_t num_elements = grad_output->NumElements();
-
-    std::vector<int64_t> out_strides(ndim);
-    if (ndim > 0) {
-        out_strides[ndim - 1] = 1;
-        for (int i = ndim - 2; i >= 0; --i) { out_strides[i] = out_strides[i + 1] * out_dims[i + 1]; }
-    }
-
-    std::vector<int64_t> b_strides(b_ndim);
-    if (b_ndim > 0) {
-        b_strides[b_ndim - 1] = 1;
-        for (int i = b_ndim - 2; i >= 0; --i) { b_strides[i] = b_strides[i + 1] * b_dims[i + 1]; }
-    }
-
-    int64_t *d_out_strides = nullptr;
-    int64_t *d_out_dims = nullptr;
-    int64_t *d_b_strides = nullptr;
-    int64_t *d_b_dims = nullptr;
-
-    cudaMalloc(&d_out_strides, ndim * sizeof(int64_t));
-    cudaMalloc(&d_out_dims, ndim * sizeof(int64_t));
-    cudaMalloc(&d_b_strides, b_ndim * sizeof(int64_t));
-    cudaMalloc(&d_b_dims, b_ndim * sizeof(int64_t));
-
-    cudaMemcpy(d_out_strides, out_strides.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_out_dims, out_dims.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b_strides, b_strides.data(), b_ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b_dims, b_dims.data(), b_ndim * sizeof(int64_t), cudaMemcpyHostToDevice);
-
-    int threads = 256;
-    int blocks = (num_elements + threads - 1) / threads;
-
-    AddBackwardReduceKernel<<<blocks, threads>>>(static_cast<const float *>(grad_output->DataPtr()),
-                                                 static_cast<float *>(grad_b->DataPtr()), d_out_strides, d_out_dims,
-                                                 ndim, d_b_strides, d_b_dims, b_ndim, num_elements);
-    // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
-    cudaFree(d_out_strides);
-    cudaFree(d_out_dims);
-    cudaFree(d_b_strides);
-    cudaFree(d_b_dims);
-
-    return {grad_a, grad_b};
+    return BinaryBackward(
+        grad_output, nullptr, nullptr, a_dims, b_dims, [] __device__(float, float) { return 1.f; },
+        [] __device__(float, float) { return 1.f; });
 }
 
 std::shared_ptr<Tensor> AddScalarForward(const std::shared_ptr<Tensor> &a, float scalar) {

@@ -6,12 +6,28 @@
 #include "infini_train/include/tensor.h"
 
 namespace infini_train::kernels::cuda {
+std::shared_ptr<Tensor> NegForward(const std::shared_ptr<Tensor> &input);
+std::shared_ptr<Tensor> NegBackward(const std::shared_ptr<Tensor> &grad_output);
+
+std::shared_ptr<Tensor> ReciprocalForward(const std::shared_ptr<Tensor> &input);
+std::shared_ptr<Tensor> ReciprocalBackward(const std::shared_ptr<Tensor> &grad_output,
+                                           const std::shared_ptr<Tensor> &input);
+
+std::shared_ptr<Tensor> SinForward(const std::shared_ptr<Tensor> &input);
+std::shared_ptr<Tensor> SinBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input);
+
+std::shared_ptr<Tensor> CosForward(const std::shared_ptr<Tensor> &input);
+std::shared_ptr<Tensor> CosBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input);
+
 std::shared_ptr<Tensor> TanhForward(const std::shared_ptr<Tensor> &input);
 std::shared_ptr<Tensor> TanhBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &output);
 
-std::shared_ptr<Tensor> PowForward(const std::shared_ptr<Tensor> &input, float exponent);
+std::shared_ptr<Tensor> PowForward(const std::shared_ptr<Tensor> &input, float scalar, bool scalar_is_base);
 std::shared_ptr<Tensor> PowBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &output,
-                                    float exponent);
+                                    float scalar, bool scalar_is_base);
+
+std::shared_ptr<Tensor> RsqrtForward(const std::shared_ptr<Tensor> &input);
+std::shared_ptr<Tensor> RsqrtBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &input);
 
 std::shared_ptr<Tensor> EqualsScalarForward(const std::shared_ptr<Tensor> &a, float scalar);
 

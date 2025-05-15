@@ -73,6 +73,71 @@ std::shared_ptr<Tensor> TrilBackward(const std::shared_ptr<Tensor> &grad_output,
     return grad_input;
 }
 
+__global__ void TriuForwardKernel(const float *input, float *output, int rows, int cols, int64_t diagonal) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) {
+        return;
+    }
+
+    int row = idx / cols;
+    int col = idx % cols;
+
+    if (row - col + diagonal <= 0) {
+        output[idx] = input[idx];
+    } else {
+        output[idx] = 0.0f;
+    }
+}
+
+std::shared_ptr<Tensor> TriuForward(const std::shared_ptr<Tensor> &input, int64_t diagonal) {
+    CHECK_EQ(input->Dims().size(), 2);
+    int64_t rows = input->Dims()[0];
+    int64_t cols = input->Dims()[1];
+
+    auto output = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+
+    int threads_per_block = 256;
+    int num_blocks = (rows * cols + threads_per_block - 1) / threads_per_block;
+
+    TriuForwardKernel<<<num_blocks, threads_per_block>>>(static_cast<const float *>(input->DataPtr()),
+                                                         static_cast<float *>(output->DataPtr()), rows, cols, diagonal);
+
+    return output;
+}
+
+__global__ void TriuBackwardKernel(const float *grad_output, float *grad_input, int rows, int cols, int64_t diagonal) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= rows * cols) {
+        return;
+    }
+
+    int row = idx / cols;
+    int col = idx % cols;
+
+    if (row - col + diagonal <= 0) {
+        grad_input[idx] = grad_output[idx];
+    } else {
+        grad_input[idx] = 0.0f;
+    }
+}
+
+std::shared_ptr<Tensor> TriuBackward(const std::shared_ptr<Tensor> &grad_output, int64_t diagonal) {
+    int rows = grad_output->Dims()[0];
+    int cols = grad_output->Dims()[1];
+
+    auto grad_input = std::make_shared<Tensor>(grad_output->Dims(), grad_output->Dtype(), grad_output->GetDevice());
+    grad_input->Fill<float>(0.0f);
+
+    int threads_per_block = 256;
+    int num_blocks = (rows * cols + threads_per_block - 1) / threads_per_block;
+
+    TriuBackwardKernel<<<num_blocks, threads_per_block>>>(static_cast<const float *>(grad_output->DataPtr()),
+                                                          static_cast<float *>(grad_input->DataPtr()), rows, cols,
+                                                          diagonal);
+
+    return grad_input;
+}
+
 __global__ void TransposeForwardKernel(const float *input, float *output, const int64_t *in_dims,
                                        const int64_t *in_strides, const int64_t *out_strides, int64_t ndim,
                                        int64_t dim0, int64_t dim1, int64_t num_elements) {
@@ -225,6 +290,100 @@ std::shared_ptr<Tensor> MaskBackward(const std::shared_ptr<Tensor> &grad_output,
     MaskBackwardKernel<<<num_blocks, threads_per_block>>>(
         static_cast<const float *>(grad_output->DataPtr()), static_cast<const float *>(mask->DataPtr()),
         static_cast<float *>(grad_input->DataPtr()), batch_size, mask_size);
+    return grad_input;
+}
+
+__global__ void RepeatInterleaveForwardKernel(const float *input, float *output, int64_t outer, int64_t dim_size,
+                                              int64_t inner, int64_t repeat) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t total = outer * dim_size * repeat * inner;
+    if (idx >= total) {
+        return;
+    }
+
+    int64_t i = idx / inner;
+    int64_t j = idx % inner;
+
+    int64_t o = i / (dim_size * repeat);
+    int64_t di = (i / repeat) % dim_size;
+
+    output[idx] = input[(o * dim_size + di) * inner + j];
+}
+
+std::shared_ptr<Tensor> RepeatInterleaveForward(const std::shared_ptr<Tensor> &input, int64_t repeat, int64_t dim) {
+    CHECK_GT(repeat, 0);
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, input->Dims().size());
+
+    const auto &input_dims = input->Dims();
+    const int64_t outer = std::accumulate(input_dims.begin(), input_dims.begin() + dim, 1, std::multiplies<int64_t>());
+    const int64_t inner
+        = std::accumulate(input_dims.begin() + dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
+    const int64_t dim_size = input_dims[dim];
+
+    std::vector<int64_t> output_dims = input_dims;
+    output_dims[dim] = dim_size * repeat;
+    auto output = std::make_shared<Tensor>(output_dims, input->Dtype(), input->GetDevice());
+
+    const float *input_ptr = static_cast<const float *>(input->DataPtr());
+    float *output_ptr = static_cast<float *>(output->DataPtr());
+
+    int64_t total_elements = outer * dim_size * repeat * inner;
+    int threads_per_block = 256;
+    int num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+    RepeatInterleaveForwardKernel<<<num_blocks, threads_per_block>>>(input_ptr, output_ptr, outer, dim_size, inner,
+                                                                     repeat);
+
+    return output;
+}
+
+__global__ void RepeatInterleaveBackwardKernel(const float *grad_output, float *grad_input, int64_t outer,
+                                               int64_t dim_size, int64_t inner, int64_t repeat) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t total = outer * dim_size * inner;
+    if (idx >= total) {
+        return;
+    }
+
+    int64_t i = idx / inner;
+    int64_t j = idx % inner;
+
+    int64_t o = i / dim_size;
+    int64_t di = i % dim_size;
+
+    float sum = 0.0f;
+    for (int64_t r = 0; r < repeat; ++r) {
+        int64_t out_idx = ((o * dim_size * repeat + di * repeat + r) * inner) + j;
+        sum += grad_output[out_idx];
+    }
+    grad_input[idx] = sum;
+}
+
+std::shared_ptr<Tensor> RepeatInterleaveBackward(const std::shared_ptr<Tensor> &grad_output,
+                                                 const std::vector<int64_t> &input_dims, int64_t dim) {
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, input_dims.size());
+
+    const int64_t outer = std::accumulate(input_dims.begin(), input_dims.begin() + dim, 1, std::multiplies<int64_t>());
+    const int64_t inner
+        = std::accumulate(input_dims.begin() + dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
+    const int64_t dim_size = input_dims[dim];
+
+    int64_t repeat = grad_output->Dims()[dim] / dim_size;
+    CHECK_EQ(grad_output->Dims()[dim], dim_size * repeat);
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, grad_output->Dtype(), grad_output->GetDevice());
+    grad_input->Fill<float>(0.0f);
+
+    const float *grad_out_ptr = static_cast<const float *>(grad_output->DataPtr());
+    float *grad_in_ptr = static_cast<float *>(grad_input->DataPtr());
+
+    int64_t total_elements = outer * dim_size * inner;
+    int threads_per_block = 256;
+    int num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
+    RepeatInterleaveBackwardKernel<<<num_blocks, threads_per_block>>>(grad_out_ptr, grad_in_ptr, outer, dim_size, inner,
+                                                                      repeat);
+
     return grad_input;
 }
 } // namespace infini_train::kernels::cuda

@@ -39,6 +39,38 @@ std::shared_ptr<Tensor> TrilBackward(const std::shared_ptr<Tensor> &grad_output,
     return grad_input;
 }
 
+std::shared_ptr<Tensor> TriuForward(const std::shared_ptr<Tensor> &input, int64_t diagonal) {
+    CHECK_EQ(input->Dims().size(), 2);
+
+    auto output = std::make_shared<Tensor>(input->Dims(), input->Dtype(), input->GetDevice());
+    for (int i = 0; i < input->NumElements(); ++i) {
+        int64_t row = i / input->Dims()[1];
+        int64_t col = i % input->Dims()[1];
+        if (row - col + diagonal <= 0) {
+            static_cast<float *>(output->DataPtr())[i] = static_cast<float *>(input->DataPtr())[i];
+        } else {
+            static_cast<float *>(output->DataPtr())[i] = 0.0f;
+        }
+    }
+    return output;
+}
+
+std::shared_ptr<Tensor> TriuBackward(const std::shared_ptr<Tensor> &grad_output, int64_t diagonal) {
+    CHECK_EQ(grad_output->Dims().size(), 2);
+
+    auto grad_input = std::make_shared<Tensor>(grad_output->Dims(), grad_output->Dtype(), grad_output->GetDevice());
+    for (int i = 0; i < grad_output->NumElements(); ++i) {
+        int64_t row = i / grad_output->Dims()[1];
+        int64_t col = i % grad_output->Dims()[1];
+        if (row - col + diagonal <= 0) {
+            static_cast<float *>(grad_input->DataPtr())[i] = static_cast<float *>(grad_output->DataPtr())[i];
+        } else {
+            static_cast<float *>(grad_input->DataPtr())[i] = 0.0f;
+        }
+    }
+    return grad_input;
+}
+
 std::shared_ptr<Tensor> TransposeForward(const std::shared_ptr<Tensor> &input, int64_t dim0, int64_t dim1) {
     dim0 = dim0 < 0 ? dim0 + input->Dims().size() : dim0;
     dim1 = dim1 < 0 ? dim1 + input->Dims().size() : dim1;
@@ -120,4 +152,69 @@ std::shared_ptr<Tensor> MaskBackward(const std::shared_ptr<Tensor> &grad_output,
     }
     return grad_input;
 }
+
+std::shared_ptr<Tensor> RepeatInterleaveForward(const std::shared_ptr<Tensor> &input, int64_t repeat, int64_t dim) {
+    CHECK_GT(repeat, 0);
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, input->Dims().size());
+
+    const auto &input_dims = input->Dims();
+    const int64_t outer = std::accumulate(input_dims.begin(), input_dims.begin() + dim, 1, std::multiplies<int64_t>());
+    const int64_t inner
+        = std::accumulate(input_dims.begin() + dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
+    const int64_t dim_size = input_dims[dim];
+
+    std::vector<int64_t> output_dims = input_dims;
+    output_dims[dim] = dim_size * repeat;
+    auto output = std::make_shared<Tensor>(output_dims, input->Dtype(), input->GetDevice());
+
+    const float *input_ptr = static_cast<const float *>(input->DataPtr());
+    float *output_ptr = static_cast<float *>(output->DataPtr());
+
+    for (int64_t o = 0; o < outer; ++o) {
+        for (int64_t i = 0; i < dim_size; ++i) {
+            for (int r = 0; r < repeat; ++r) {
+                std::memcpy(output_ptr + ((o * dim_size * repeat + i * repeat + r) * inner),
+                            input_ptr + ((o * dim_size + i) * inner), sizeof(float) * inner);
+            }
+        }
+    }
+
+    return output;
+}
+
+std::shared_ptr<Tensor> RepeatInterleaveBackward(const std::shared_ptr<Tensor> &grad_output,
+                                                 const std::vector<int64_t> &input_dims, int64_t dim) {
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, input_dims.size());
+
+    const int64_t outer = std::accumulate(input_dims.begin(), input_dims.begin() + dim, 1, std::multiplies<int64_t>());
+    const int64_t inner
+        = std::accumulate(input_dims.begin() + dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
+    const int64_t dim_size = input_dims[dim];
+
+    int repeat = grad_output->Dims()[dim] / dim_size;
+    CHECK_EQ(grad_output->Dims()[dim], dim_size * repeat);
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, grad_output->Dtype(), grad_output->GetDevice());
+    grad_input->Fill<float>(0.0f);
+
+    const float *grad_out_ptr = static_cast<const float *>(grad_output->DataPtr());
+    float *grad_in_ptr = static_cast<float *>(grad_input->DataPtr());
+
+    for (int64_t o = 0; o < outer; ++o) {
+        for (int64_t i = 0; i < dim_size; ++i) {
+            for (int64_t j = 0; j < inner; ++j) {
+                float sum = 0.0f;
+                for (int r = 0; r < repeat; ++r) {
+                    sum += grad_out_ptr[((o * dim_size * repeat + i * repeat + r) * inner) + j];
+                }
+                grad_in_ptr[(o * dim_size + i) * inner + j] = sum;
+            }
+        }
+    }
+
+    return grad_input;
+}
+
 } // namespace infini_train::kernels::cpu

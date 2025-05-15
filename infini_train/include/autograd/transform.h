@@ -20,6 +20,18 @@ private:
     int64_t diagonal_;
 };
 
+class Triu : public Function {
+public:
+    static constexpr char kType[] = "TriuFunction";
+
+    Triu(int64_t diagonal) : Function(kType), diagonal_(diagonal) {}
+    std::vector<std::shared_ptr<Tensor>> Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) override;
+    std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
+
+private:
+    int64_t diagonal_;
+};
+
 class Transpose : public Function {
 public:
     static constexpr char kType[] = "TransposeFunction";
@@ -45,4 +57,22 @@ private:
     std::shared_ptr<Tensor> mask_;
     float value_;
 };
+
+class RepeatInterleave : public Function {
+public:
+    static constexpr char kType[] = "RepeatInterleaveFunction";
+
+    RepeatInterleave(int64_t repeat, int64_t dim) : Function(kType), repeat_(repeat), dim_(dim) {}
+
+    std::vector<std::shared_ptr<Tensor>> Forward(const std::vector<std::shared_ptr<Tensor>> &inputs) override;
+    void SetupContext(const std::vector<std::shared_ptr<Tensor>> &inputs,
+                      const std::vector<std::shared_ptr<Tensor>> &outputs) override;
+    std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
+
+private:
+    int64_t repeat_;
+    int64_t dim_;
+    std::vector<int64_t> input_dims_;
+};
+
 } // namespace infini_train::autograd
