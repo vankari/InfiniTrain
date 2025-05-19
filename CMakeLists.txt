@@ -55,8 +55,11 @@ endif()
 add_executable(mnist example/mnist/main.cc example/mnist/dataset.cc example/mnist/net.cc)
 target_link_libraries(mnist glog gflags infini_train Eigen3::Eigen)
 
-add_executable(gpt2 example/gpt2/main.cc example/gpt2/dataset.cc example/gpt2/net.cc)
+add_executable(gpt2 example/gpt2/main.cc example/gpt2/dataset.cc example/gpt2/net.cc example/gpt2/tokenizer/tokenizer.cc)
 target_link_libraries(gpt2 glog gflags infini_train Eigen3::Eigen)
+
+add_executable(test_tokenizer example/gpt2/tokenizer/test_gen_bin.cc example/gpt2/tokenizer/tokenizer.cc)
+target_link_libraries(test_tokenizer glog gflags infini_train Eigen3::Eigen)
 
 # OpenBLAS
 # target_link_libraries(infini_train ${OpenBLAS_LIBRARIES})
