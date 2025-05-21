@@ -1,5 +1,3 @@
-#include "infini_train/include/kernels/cuda/softmax.h"
-
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -7,6 +5,7 @@
 
 #include "glog/logging.h"
 
+#include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
 
 namespace infini_train::kernels::cuda {
@@ -79,10 +78,7 @@ void LaunchForward(const std::shared_ptr<Tensor> &output, const std::shared_ptr<
     T *output_ptr = static_cast<T *>(output->DataPtr());
     const T *input_ptr = static_cast<const T *>(input->DataPtr());
 
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, input->GetDevice().Index());
-
-    if (BLOCK_SIZE > prop.maxThreadsPerBlock) {
+    if (BLOCK_SIZE > 1024) {
         LOG(FATAL) << "CUDA softmax forward: 'BLOCK_SIZE used is larger than the max number of thread per block' at "
                    << __FILE__ << ":" << __LINE__;
     }
@@ -164,10 +160,7 @@ void LaunchBackward(const std::shared_ptr<Tensor> &grad_input, const std::shared
     const T *grad_output_ptr = static_cast<const T *>(grad_output->DataPtr());
     const T *output_ptr = static_cast<const T *>(output->DataPtr());
 
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, output->GetDevice().Index());
-
-    if (BLOCK_SIZE > prop.maxThreadsPerBlock) {
+    if (BLOCK_SIZE > 1024) {
         LOG(FATAL) << "CUDA softmax backward: 'BLOCK_SIZE used is larger than the max number of thread per block' at "
                    << __FILE__ << ":" << __LINE__;
     }
@@ -199,3 +192,11 @@ std::shared_ptr<Tensor> SoftmaxBackward(const std::shared_ptr<Tensor> &grad_outp
     return grad_input;
 }
 } // namespace infini_train::kernels::cuda
+
+#define REGISTER_CUDA_SOFTMAX_KERNEL(kernel_name)                                                                      \
+    REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
+
+REGISTER_CUDA_SOFTMAX_KERNEL(SoftmaxForward)
+REGISTER_CUDA_SOFTMAX_KERNEL(SoftmaxBackward)
+
+#undef REGISTER_CUDA_SOFTMAX_KERNEL

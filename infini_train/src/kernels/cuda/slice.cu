@@ -1,11 +1,6 @@
-#include "infini_train/include/kernels/cuda/slice.h"
-
-#include <cmath>
-#include <functional>
-#include <memory>
-
 #include "glog/logging.h"
 
+#include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
 
 namespace infini_train::kernels::cuda {
@@ -61,17 +56,20 @@ std::shared_ptr<Tensor> SliceForward(const std::shared_ptr<Tensor> &input, const
     int64_t total_elements = stride;
 
     int64_t *new_dims_dev, *starts_dev, *steps_dev, *input_strides_dev, *output_strides_dev;
-    cudaMalloc(&new_dims_dev, ends.size() * sizeof(int64_t));
-    cudaMalloc(&starts_dev, starts.size() * sizeof(int64_t));
-    cudaMalloc(&steps_dev, steps.size() * sizeof(int64_t));
-    cudaMalloc(&input_strides_dev, dims.size() * sizeof(int64_t));
-    cudaMalloc(&output_strides_dev, new_dims.size() * sizeof(int64_t));
 
-    cudaMemcpy(new_dims_dev, new_dims.data(), ends.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(starts_dev, starts.data(), starts.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(steps_dev, steps.data(), steps.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(input_strides_dev, src_strides.data(), dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(output_strides_dev, dst_strides.data(), new_dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMallocAsync(&new_dims_dev,
+                    (ends.size() + starts.size() + steps.size() + dims.size() + new_dims.size()) * sizeof(int64_t), 0);
+    starts_dev = new_dims_dev + ends.size();
+    steps_dev = starts_dev + starts.size();
+    input_strides_dev = steps_dev + steps.size();
+    output_strides_dev = input_strides_dev + dims.size();
+
+    cudaMemcpyAsync(new_dims_dev, new_dims.data(), ends.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(starts_dev, starts.data(), starts.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(steps_dev, steps.data(), steps.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(input_strides_dev, src_strides.data(), dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(output_strides_dev, dst_strides.data(), new_dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice,
+                    0);
 
     int threads_per_block = 256;
     int num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
@@ -80,11 +78,7 @@ std::shared_ptr<Tensor> SliceForward(const std::shared_ptr<Tensor> &input, const
         static_cast<const float *>(input->DataPtr()), static_cast<float *>(new_tensor->DataPtr()), new_dims_dev,
         starts_dev, steps_dev, input_strides_dev, output_strides_dev, num_dims, total_elements);
     // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
-    cudaFree(new_dims_dev);
-    cudaFree(starts_dev);
-    cudaFree(steps_dev);
-    cudaFree(input_strides_dev);
-    cudaFree(output_strides_dev);
+    cudaFreeAsync(new_dims_dev, 0);
 
     return new_tensor;
 }
@@ -142,17 +136,20 @@ std::shared_ptr<Tensor> SliceBackward(const std::shared_ptr<Tensor> &grad_output
 
     int dims_size = dims.size();
     int64_t *new_dims_dev, *starts_dev, *steps_dev, *input_strides_dev, *output_strides_dev;
-    cudaMalloc(&new_dims_dev, ends.size() * sizeof(int64_t));
-    cudaMalloc(&starts_dev, starts.size() * sizeof(int64_t));
-    cudaMalloc(&steps_dev, steps.size() * sizeof(int64_t));
-    cudaMalloc(&input_strides_dev, dims.size() * sizeof(int64_t));
-    cudaMalloc(&output_strides_dev, new_dims.size() * sizeof(int64_t));
 
-    cudaMemcpy(new_dims_dev, new_dims.data(), ends.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(starts_dev, starts.data(), starts.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(steps_dev, steps.data(), steps.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(input_strides_dev, src_strides.data(), dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(output_strides_dev, dst_strides.data(), new_dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
+    cudaMallocAsync(&new_dims_dev,
+                    (ends.size() + starts.size() + steps.size() + dims.size() + new_dims.size()) * sizeof(int64_t), 0);
+    starts_dev = new_dims_dev + ends.size();
+    steps_dev = starts_dev + starts.size();
+    input_strides_dev = steps_dev + steps.size();
+    output_strides_dev = input_strides_dev + dims.size();
+
+    cudaMemcpyAsync(new_dims_dev, new_dims.data(), ends.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(starts_dev, starts.data(), starts.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(steps_dev, steps.data(), steps.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(input_strides_dev, src_strides.data(), dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(output_strides_dev, dst_strides.data(), new_dims.size() * sizeof(int64_t), cudaMemcpyHostToDevice,
+                    0);
 
     int threads_per_block = 256;
     int num_blocks = (total_elements + threads_per_block - 1) / threads_per_block;
@@ -162,12 +159,16 @@ std::shared_ptr<Tensor> SliceBackward(const std::shared_ptr<Tensor> &grad_output
         starts_dev, steps_dev, input_strides_dev, output_strides_dev, num_dims, total_elements);
 
     // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
-    cudaFree(new_dims_dev);
-    cudaFree(starts_dev);
-    cudaFree(steps_dev);
-    cudaFree(input_strides_dev);
-    cudaFree(output_strides_dev);
+    cudaFreeAsync(new_dims_dev, 0);
 
     return grad_input;
 }
 } // namespace infini_train::kernels::cuda
+
+#define REGISTER_CUDA_SLICE_KERNEL(kernel_name)                                                                        \
+    REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
+
+REGISTER_CUDA_SLICE_KERNEL(SliceForward)
+REGISTER_CUDA_SLICE_KERNEL(SliceBackward)
+
+#undef REGISTER_CUDA_SLICE_KERNEL

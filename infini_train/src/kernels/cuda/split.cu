@@ -1,13 +1,10 @@
-#include "infini_train/include/kernels/cuda/split.h"
-
 #include <algorithm>
-#include <memory>
 #include <numeric>
-#include <utility>
 #include <vector>
 
 #include "glog/logging.h"
 
+#include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
 
 namespace infini_train::kernels::cuda {
@@ -109,18 +106,21 @@ std::shared_ptr<Tensor> SplitBackward(const std::vector<int64_t> &input_dims, in
         host_grad_output_ptrs.push_back(static_cast<const float *>(grad_output->DataPtr()));
     }
 
+    void *device_ptr;
     const float **device_grad_output_ptrs;
-    cudaMalloc(&device_grad_output_ptrs, sizeof(float *) * num_splits);
-    cudaMemcpy(device_grad_output_ptrs, host_grad_output_ptrs.data(), sizeof(float *) * num_splits,
-               cudaMemcpyHostToDevice);
+    int64_t *device_H_outs;
+    cudaMallocAsync(&device_ptr, (sizeof(float *) + sizeof(int64_t)) * num_splits, 0);
+    device_grad_output_ptrs = (const float **)(device_ptr);
+    device_H_outs = reinterpret_cast<int64_t *>(device_grad_output_ptrs + num_splits);
+
+    cudaMemcpyAsync(device_grad_output_ptrs, host_grad_output_ptrs.data(), sizeof(float *) * num_splits,
+                    cudaMemcpyHostToDevice, 0);
 
     // init H_out for each split
     std::vector<int64_t> H_outs(num_splits);
     for (int i = 0; i < num_splits; ++i) { H_outs[i] = std::min(split_size, H_in - i * split_size); }
 
-    int64_t *device_H_outs;
-    cudaMalloc(&device_H_outs, sizeof(int64_t) * num_splits);
-    cudaMemcpy(device_H_outs, H_outs.data(), sizeof(int64_t) * num_splits, cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(device_H_outs, H_outs.data(), sizeof(int64_t) * num_splits, cudaMemcpyHostToDevice, 0);
 
     int64_t total_elements = N * H_in * W;
     int threads_per_block = 256;
@@ -131,8 +131,15 @@ std::shared_ptr<Tensor> SplitBackward(const std::vector<int64_t> &input_dims, in
                                                            split_size, num_splits, device_H_outs);
 
     // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
-    cudaFree(device_H_outs);
-    cudaFree(device_grad_output_ptrs);
+    cudaFreeAsync(device_ptr, 0);
     return grad_input;
 }
 } // namespace infini_train::kernels::cuda
+
+#define REGISTER_CUDA_SPLIT_KERNEL(kernel_name)                                                                        \
+    REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
+
+REGISTER_CUDA_SPLIT_KERNEL(SplitForward)
+REGISTER_CUDA_SPLIT_KERNEL(SplitBackward)
+
+#undef REGISTER_CUDA_SPLIT_KERNEL
