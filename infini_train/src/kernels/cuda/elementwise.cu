@@ -105,18 +105,18 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
         auto out_stride_host = ComputeStride(out_shape);
 
         int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
-        cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t));
-        cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t));
-        cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t));
-        cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t));
-        cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t));
+        cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t), 0);
+        cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t), 0);
+        cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t), 0);
+        cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t), 0);
+        cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t), 0);
 
-        cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-        cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
+        cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+        cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
         cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t),
-                        cudaMemcpyAsyncHostToDevice);
-        cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-        cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
+                        cudaMemcpyHostToDevice, 0);
+        cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+        cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
 
         LaunchKernel<BLOCK_SIZE, T>(
             [&](dim3 grid, dim3 block, size_t offset, const T *a_ptr, const T *b_ptr) {
@@ -200,17 +200,17 @@ void LaunchBackward(FuncA fun_a, FuncB fun_b, const std::shared_ptr<Tensor> &out
     auto out_stride_host = ComputeStride(out_shape);
 
     int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
-    cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t));
-    cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t));
-    cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t));
-    cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t));
-    cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t));
+    cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t), 0);
+    cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t), 0);
+    cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t), 0);
+    cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t), 0);
+    cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t), 0);
 
-    cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-    cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-    cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-    cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
-    cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyAsyncHostToDevice);
+    cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
 
     const size_t num_elements = grad_output->NumElements();
     LaunchKernel<BLOCK_SIZE, T>(
@@ -221,11 +221,11 @@ void LaunchBackward(FuncA fun_a, FuncB fun_b, const std::shared_ptr<Tensor> &out
         },
         output_a, inputs...);
 
-    cudaFreeAsync(device_a_strides);
-    cudaFreeAsync(device_b_strides);
-    cudaFreeAsync(device_out_strides);
-    cudaFreeAsync(device_a_shape);
-    cudaFreeAsync(device_b_shape);
+    cudaFreeAsync(device_a_strides, 0);
+    cudaFreeAsync(device_b_strides, 0);
+    cudaFreeAsync(device_out_strides, 0);
+    cudaFreeAsync(device_a_shape, 0);
+    cudaFreeAsync(device_b_shape, 0);
 }
 
 template <typename Func> std::shared_ptr<Tensor> UnaryForward(const std::shared_ptr<Tensor> &input, Func unary_fn) {
@@ -436,10 +436,20 @@ std::shared_ptr<Tensor> MulScalarBackward(const std::shared_ptr<Tensor> &grad_ou
 #define REGISTER_CUDA_ELEMENTWISE_KERNEL(kernel_name)                                                                  \
     REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
 
+REGISTER_CUDA_ELEMENTWISE_KERNEL(NegForward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(NegBackward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(ReciprocalForward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(ReciprocalBackward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(SinForward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(SinBackward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(CosForward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(CosBackward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(TanhForward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(TanhBackward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(PowForward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(PowBackward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(RsqrtForward)
+REGISTER_CUDA_ELEMENTWISE_KERNEL(RsqrtBackward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(EqualsScalarForward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(AddForward)
 REGISTER_CUDA_ELEMENTWISE_KERNEL(AddBackward)
