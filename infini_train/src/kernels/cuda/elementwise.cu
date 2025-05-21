@@ -113,8 +113,7 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
 
         cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
         cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-        cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t),
-                        cudaMemcpyHostToDevice, 0);
+        cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
         cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
         cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
 
