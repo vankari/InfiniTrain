@@ -172,9 +172,7 @@ std::shared_ptr<Tensor> MinBackward(const std::shared_ptr<Tensor> &grad_output, 
 #define REGISTER_CPU_REDUCTION_KERNEL(kernel_name)                                                                     \
     REGISTER_KERNEL(infini_train::DeviceType::kCPU, kernel_name, infini_train::kernels::cpu::kernel_name)
 
-REGISTER_CPU_REDUCTION_KERNEL(ReduceOpForward)
-REGISTER_CPU_REDUCTION_KERNEL(ReduceOpBackwardMask)
-REGISTER_CPU_REDUCTION_KERNEL(ReduceOpBackward)
+
 REGISTER_CPU_REDUCTION_KERNEL(MeanForward)
 REGISTER_CPU_REDUCTION_KERNEL(MeanBackward)
 REGISTER_CPU_REDUCTION_KERNEL(SumForward)
@@ -184,4 +182,4 @@ REGISTER_CPU_REDUCTION_KERNEL(MaxBackward)
 REGISTER_CPU_REDUCTION_KERNEL(MinForward)
 REGISTER_CPU_REDUCTION_KERNEL(MinBackward)
 
-#undef REGISTER_CPU_REDUCTION_KERNELMinBac
+#undef REGISTER_CPU_REDUCTION_KERNEL

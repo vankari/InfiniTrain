@@ -191,7 +191,6 @@ std::shared_ptr<Tensor> MinBackward(const std::shared_ptr<Tensor> &grad_output, 
     REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
 
 // REGISTER_CUDA_REDUCTION_KERNEL(ReduceOpForward)
-REGISTER_CUDA_REDUCTION_KERNEL(ReduceOpBackward)
 REGISTER_CUDA_REDUCTION_KERNEL(MeanForward)
 REGISTER_CUDA_REDUCTION_KERNEL(SumForward)
 REGISTER_CUDA_REDUCTION_KERNEL(MaxForward)
