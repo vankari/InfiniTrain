@@ -71,7 +71,6 @@ std::vector<std::shared_ptr<Tensor>> Slice::Backward(const std::vector<std::shar
     CHECK_EQ(saved_tensors_.size(), 1);
     const auto &input = saved_tensors_[0];
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
     auto device = input->GetDevice().Type();
     auto kernel = Dispatcher::Instance().GetKernel({device, "SliceBackward"});
@@ -80,25 +79,10 @@ std::vector<std::shared_ptr<Tensor>> Slice::Backward(const std::vector<std::shar
 
 std::vector<std::shared_ptr<Tensor>> Stack::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
     CHECK_GE(input_tensors.size(), 2);
-    const auto device = input_tensors[0]->GetDevice();
-    std::shared_ptr<Tensor> output = nullptr;
+    const auto device = input_tensors[0]->GetDevice().Type();
 
-    switch (device.Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::StackForward(input_tensors, dim_);
-        return {output};
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::StackForward(input_tensors, dim_);
-        return {output};
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(device.Type());
-        break;
-    }
-    return {output};
+    auto kernel = Dispatcher::Instance().GetKernel({device, "StackForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input_tensors, dim_)};
 }
 
 void Stack::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
@@ -110,21 +94,8 @@ void Stack::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tenso
 std::vector<std::shared_ptr<Tensor>> Stack::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
 
-    switch (grad_output->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        auto grad_inputs = kernels::cpu::StackBackward(input_dims_, dim_, grad_output);
-        return grad_inputs;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        auto grad_inputs = kernels::cuda::StackBackward(input_dims_, dim_, grad_output);
-        return grad_inputs;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(grad_output->GetDevice().Type());
-        break;
-    }
-    return {};
+    auto device = grad_output->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "StackBackward"});
+    return kernel.Call<std::vector<std::shared_ptr<Tensor>>>(input_dims_, dim_, grad_output);
 }
 } // namespace infini_train::autograd

@@ -14,7 +14,6 @@ std::vector<std::shared_ptr<Tensor>> Tril::Forward(const std::vector<std::shared
 
 std::vector<std::shared_ptr<Tensor>> Tril::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
     auto device = grad_output->GetDevice().Type();
     auto kernel = Dispatcher::Instance().GetKernel({device, "TrilBackward"});
@@ -25,45 +24,17 @@ std::vector<std::shared_ptr<Tensor>> Triu::Forward(const std::vector<std::shared
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::TriuForward(input, diagonal_);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::TriuForward(input, diagonal_);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "TriuForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input, diagonal_)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Triu::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
-    switch (grad_output->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::TriuBackward(grad_output, diagonal_);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::TriuBackward(grad_output, diagonal_);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(grad_output->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = grad_output->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "TriuBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, diagonal_)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Transpose::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
@@ -77,7 +48,6 @@ std::vector<std::shared_ptr<Tensor>> Transpose::Forward(const std::vector<std::s
 
 std::vector<std::shared_ptr<Tensor>> Transpose::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
     auto device = grad_output->GetDevice().Type();
     auto kernel = Dispatcher::Instance().GetKernel({device, "TransposeBackward"});
@@ -95,7 +65,6 @@ std::vector<std::shared_ptr<Tensor>> Mask::Forward(const std::vector<std::shared
 
 std::vector<std::shared_ptr<Tensor>> Mask::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
     auto device = grad_output->GetDevice().Type();
     auto kernel = Dispatcher::Instance().GetKernel({device, "MaskBackward"});
@@ -107,23 +76,9 @@ RepeatInterleave::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tens
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::RepeatInterleaveForward(input, repeat_, dim_);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::RepeatInterleaveForward(input, repeat_, dim_);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "RepeatInterleaveForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input, repeat_, dim_)};
 }
 
 void RepeatInterleave::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
@@ -135,23 +90,9 @@ void RepeatInterleave::SetupContext(const std::vector<std::shared_ptr<Tensor>> &
 std::vector<std::shared_ptr<Tensor>>
 RepeatInterleave::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     const auto &grad_output = grad_outputs[0];
-    std::shared_ptr<Tensor> grad_input = nullptr;
 
-    switch (grad_output->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::RepeatInterleaveBackward(grad_output, input_dims_, dim_);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::RepeatInterleaveBackward(grad_output, input_dims_, dim_);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(grad_output->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = grad_output->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "RepeatInterleaveBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input_dims_, dim_)};
 }
 } // namespace infini_train::autograd

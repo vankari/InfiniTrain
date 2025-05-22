@@ -8,69 +8,27 @@ std::vector<std::shared_ptr<Tensor>> Neg::Forward(const std::vector<std::shared_
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::NegForward(input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::NegForward(input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Neg::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
     CHECK_EQ(grad_outputs.size(), 1);
     const auto &grad_output = grad_outputs[0];
 
-    std::shared_ptr<Tensor> grad_input = nullptr;
-    switch (grad_output->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::NegBackward(grad_output);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::NegBackward(grad_output);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(grad_output->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = grad_output->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "NegBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Reciprocal::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::ReciprocalForward(input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::ReciprocalForward(input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "ReciprocalForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 
 void Reciprocal::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
@@ -85,46 +43,18 @@ std::vector<std::shared_ptr<Tensor>> Reciprocal::Backward(const std::vector<std:
     CHECK_EQ(grad_outputs.size(), 1);
     const auto &grad_output = grad_outputs[0];
 
-    std::shared_ptr<Tensor> grad_input = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::ReciprocalBackward(grad_output, input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::ReciprocalBackward(grad_output, input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "ReciprocalBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Sin::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::SinForward(input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::SinForward(input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "SinForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 
 void Sin::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
@@ -139,46 +69,18 @@ std::vector<std::shared_ptr<Tensor>> Sin::Backward(const std::vector<std::shared
     CHECK_EQ(grad_outputs.size(), 1);
     const auto &grad_output = grad_outputs[0];
 
-    std::shared_ptr<Tensor> grad_input = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::SinBackward(grad_output, input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::SinBackward(grad_output, input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "SinBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Cos::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
     CHECK_EQ(input_tensors.size(), 1);
     const auto &input = input_tensors[0];
 
-    std::shared_ptr<Tensor> output = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        output = kernels::cpu::CosForward(input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        output = kernels::cuda::CosForward(input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {output};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "CosForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
 }
 
 void Cos::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
@@ -193,23 +95,9 @@ std::vector<std::shared_ptr<Tensor>> Cos::Backward(const std::vector<std::shared
     CHECK_EQ(grad_outputs.size(), 1);
     const auto &grad_output = grad_outputs[0];
 
-    std::shared_ptr<Tensor> grad_input = nullptr;
-    switch (input->GetDevice().Type()) {
-    case DeviceType::kCPU: {
-        grad_input = kernels::cpu::CosBackward(grad_output, input);
-        break;
-    }
-#ifdef USE_CUDA
-    case DeviceType::kCUDA: {
-        grad_input = kernels::cuda::CosBackward(grad_output, input);
-        break;
-    }
-#endif
-    default:
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(input->GetDevice().Type());
-        break;
-    }
-    return {grad_input};
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "CosBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> Tanh::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
@@ -262,6 +150,32 @@ std::vector<std::shared_ptr<Tensor>> Pow::Backward(const std::vector<std::shared
     auto device = input->GetDevice().Type();
     auto kernel = Dispatcher::Instance().GetKernel({device, "PowBackward"});
     return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input, exponent_, scalar_is_base_)};
+}
+
+std::vector<std::shared_ptr<Tensor>> Rsqrt::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
+    CHECK_EQ(input_tensors.size(), 1);
+    const auto &input = input_tensors[0];
+
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "RsqrtForward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(input)};
+}
+
+void Rsqrt::SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
+                         const std::vector<std::shared_ptr<Tensor>> &) {
+    const auto &input = input_tensors[0];
+    saved_tensors_ = {input};
+}
+
+std::vector<std::shared_ptr<Tensor>> Rsqrt::Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) {
+    CHECK_EQ(saved_tensors_.size(), 1);
+    const auto &input = saved_tensors_[0];
+    CHECK_EQ(grad_outputs.size(), 1);
+    const auto &grad_output = grad_outputs[0];
+
+    auto device = input->GetDevice().Type();
+    auto kernel = Dispatcher::Instance().GetKernel({device, "RsqrtBackward"});
+    return {kernel.Call<std::shared_ptr<Tensor>>(grad_output, input)};
 }
 
 std::vector<std::shared_ptr<Tensor>> EqualsScalar::Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
