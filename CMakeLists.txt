@@ -65,4 +65,3 @@ target_link_libraries(gpt2 infini_train)
 
 add_executable(llama3 example/llama3/main.cc example/llama3/dataset.cc example/llama3/net.cc)
 target_link_libraries(llama3 infini_train)
-

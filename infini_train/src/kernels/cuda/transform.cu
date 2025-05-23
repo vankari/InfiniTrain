@@ -207,7 +207,6 @@ std::shared_ptr<Tensor> TransposeForward(const std::shared_ptr<Tensor> &input, i
         static_cast<const float *>(input->DataPtr()), static_cast<float *>(output->DataPtr()), in_dims_dev,
         in_strides_dev, out_strides_dev, ndim, dim0, dim1, num_elements);
 
-    // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
     cudaFreeAsync(in_dims_dev, 0);
 
     return output;

@@ -407,7 +407,7 @@ void Tensor::SaveAsNpy(const std::string &path) const {
     else if (GetDevice().Type() == DeviceType::kCUDA) {
         // If on CUDA, copy back to host
         cudaDeviceSynchronize();
-        cudaError_t err = cudaMemcpyAsync(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost, 0);
+        cudaError_t err = cudaMemcpy(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost);
         CHECK_EQ(err, cudaSuccess) << "cudaMemcpy failed: " << cudaGetErrorString(err);
     }
 #endif
@@ -526,7 +526,7 @@ void Tensor::Print(std::ostream &os) const {
 #ifdef USE_CUDA
     else if (GetDevice().Type() == DeviceType::kCUDA) {
         cudaDeviceSynchronize();
-        cudaError_t err = cudaMemcpyAsync(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost, 0);
+        cudaError_t err = cudaMemcpy(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost);
         CHECK_EQ(err, cudaSuccess) << "cudaMemcpy failed: " << cudaGetErrorString(err);
     }
 #endif

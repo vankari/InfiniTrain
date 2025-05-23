@@ -30,10 +30,8 @@ std::shared_ptr<Tensor> SigmoidBackward(const std::shared_ptr<Tensor> &output,
         const float y = output_ptr[idx];
         grad_input_ptr[idx] = grad_output_ptr[idx] * y * (1.0f - y);
     }
-
     return grad_input;
 }
-
 } // namespace infini_train::kernels::cpu
 
 #define REGISTER_CPU_SIGMOID_KERNEL(kernel_name)                                                                       \

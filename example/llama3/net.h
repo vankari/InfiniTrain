@@ -76,7 +76,6 @@ private:
     int64_t n_kv_head_ = 0;
     int64_t n_rep_ = 0;
     int64_t head_dim_ = 0;
-    std::shared_ptr<infini_train::Tensor> mask_;
 };
 
 class MLP : public infini_train::nn::Module {
@@ -117,9 +116,12 @@ public:
     static constexpr char kLMHeadLayerName[] = "lm_head";
 
     enum class ModelType : int8_t {
-        kLLaMA3_1,
-        kLLaMA3_2,
-        kLLaMA3_3,
+        // TODO(zbl): more model type from huggingface
+        kLLaMA3_1_8B,
+        kLLaMA3_1_70B,
+        kLLaMA3_2_1B,
+        kLLaMA3_2_3B,
+        kLLaMA3_3_70B,
     };
 
     explicit LLaMA3(const LLaMA3Config &config);
