@@ -61,18 +61,8 @@ add_executable(mnist example/mnist/main.cc example/mnist/dataset.cc example/mnis
 target_link_libraries(mnist infini_train)
 
 add_executable(gpt2 example/gpt2/main.cc example/gpt2/dataset.cc example/gpt2/net.cc)
-target_link_libraries(gpt2 glog gflags infini_train Eigen3::Eigen)
+target_link_libraries(gpt2 infini_train)
 
 add_executable(llama3 example/llama3/main.cc example/llama3/dataset.cc example/llama3/net.cc)
-target_link_libraries(llama3 glog gflags infini_train Eigen3::Eigen)
-
-# OpenBLAS
-# target_link_libraries(infini_train ${OpenBLAS_LIBRARIES})
-# target_link_libraries(mnist ${OpenBLAS_LIBRARIES})
-# target_link_libraries(gpt2 ${OpenBLAS_LIBRARIES})
-
-# OpenMP
-target_link_libraries(infini_train OpenMP::OpenMP_CXX)
-target_link_libraries(mnist OpenMP::OpenMP_CXX)
-target_link_libraries(gpt2 OpenMP::OpenMP_CXX)
+target_link_libraries(llama3 infini_train)
 

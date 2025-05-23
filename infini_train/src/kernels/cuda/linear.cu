@@ -133,10 +133,10 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
         // C = A * B.T ==> grad_other.T[*, n, k] = grad_output.T[*, n, m] * input[*, m, k]
         // C = grad_other.T[*, n, k]
         // A = grad_output.T[*, n, m]
-        // B = input.T[*, m, k]
-        const int lda = n, ldb = m, ldc = n;
+        // B = input.T[*, k, m]
+        const int lda = n, ldb = k, ldc = n;
         const int64_t stride_a = n * m;
-        const int64_t stride_b = m * k;
+        const int64_t stride_b = k * m;
         const int64_t stride_c = n * k;
         CUBLAS_CHECK(cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, k, m, &alpha,
                                                 grad_output->DataPtr(), CUDA_R_32F, lda, stride_a, input->DataPtr(),

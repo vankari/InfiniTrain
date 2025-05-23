@@ -58,8 +58,8 @@ std::shared_ptr<Tensor> StackForward(const std::vector<std::shared_ptr<Tensor>> 
     for (const auto &t : inputs) { host_input_ptrs.push_back(static_cast<const float *>(t->DataPtr())); }
 
     const float **device_input_ptrs;
-    cudaMalloc(&device_input_ptrs, sizeof(float *) * num_inputs);
-    cudaMemcpy(device_input_ptrs, host_input_ptrs.data(), sizeof(float *) * num_inputs, cudaMemcpyHostToDevice);
+    cudaMallocAsync(&device_input_ptrs, sizeof(float *) * num_inputs, 0);
+    cudaMemcpyAsync(device_input_ptrs, host_input_ptrs.data(), sizeof(float *) * num_inputs, cudaMemcpyHostToDevice, 0);
 
     int64_t total = N * num_inputs * D;
     int threads_per_block = 256;
@@ -67,7 +67,7 @@ std::shared_ptr<Tensor> StackForward(const std::vector<std::shared_ptr<Tensor>> 
     StackForwardKernel<<<num_blocks, threads_per_block>>>(device_input_ptrs, static_cast<float *>(output->DataPtr()), N,
                                                           D, num_inputs);
 
-    cudaFree(device_input_ptrs);
+    cudaFreeAsync(device_input_ptrs, 0);
     return output;
 }
 
@@ -112,8 +112,8 @@ std::vector<std::shared_ptr<Tensor>> StackBackward(const std::vector<int64_t> &i
     for (auto &t : grads) { host_ptrs.push_back(static_cast<float *>(t->DataPtr())); }
 
     float **device_ptrs;
-    cudaMalloc(&device_ptrs, sizeof(float *) * num_inputs);
-    cudaMemcpy(device_ptrs, host_ptrs.data(), sizeof(float *) * num_inputs, cudaMemcpyHostToDevice);
+    cudaMallocAsync(&device_ptrs, sizeof(float *) * num_inputs, 0);
+    cudaMemcpyAsync(device_ptrs, host_ptrs.data(), sizeof(float *) * num_inputs, cudaMemcpyHostToDevice, 0);
 
     int64_t total = N * num_inputs * D;
     int threads_per_block = 256;
@@ -123,7 +123,7 @@ std::vector<std::shared_ptr<Tensor>> StackBackward(const std::vector<int64_t> &i
                                                            device_ptrs, N, D, num_inputs);
 
     CUDA_CHECK(cudaGetLastError());
-    cudaFree(device_ptrs);
+    cudaFreeAsync(device_ptrs, 0);
     return grads;
 }
 

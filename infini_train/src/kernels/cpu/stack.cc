@@ -31,13 +31,15 @@ std::shared_ptr<Tensor> StackForward(const std::vector<std::shared_ptr<Tensor>> 
         = std::accumulate(output_dims.begin(), output_dims.begin() + dim, 1, std::multiplies<int64_t>());
     const int64_t inner_size
         = std::accumulate(output_dims.begin() + dim + 1, output_dims.end(), 1, std::multiplies<int64_t>());
-    const int64_t slice_size = inputs[0]->NumElements();
+    const size_t elem_size = sizeof(float);
 
     for (size_t i = 0; i < inputs.size(); ++i) {
         const float *src_ptr = static_cast<const float *>(inputs[i]->DataPtr());
-        float *dst_ptr = static_cast<float *>(output->DataPtr()) + i * inner_size;
+        float *dst_ptr = static_cast<float *>(output->DataPtr());
         for (int64_t n = 0; n < outer_size; ++n) {
-            memcpy(dst_ptr + n * inputs.size() * inner_size, src_ptr + n * inner_size, inner_size * sizeof(float));
+            float *dst_block = dst_ptr + (n * inputs.size() + i) * inner_size;
+            const float *src_block = src_ptr + n * inner_size;
+            memcpy(dst_block, src_block, inner_size * elem_size);
         }
     }
 
@@ -46,20 +48,31 @@ std::shared_ptr<Tensor> StackForward(const std::vector<std::shared_ptr<Tensor>> 
 
 std::vector<std::shared_ptr<Tensor>> StackBackward(const std::vector<int64_t> &input_dims, int64_t dim,
                                                    const std::shared_ptr<Tensor> &grad_output) {
-    const int64_t num_inputs = grad_output->Dims()[dim];
-    std::vector<std::shared_ptr<Tensor>> grads;
-    std::vector<int64_t> out_dims = grad_output->Dims();
-    out_dims.erase(out_dims.begin() + dim); // remove the stack dim
+    const auto &grad_dims = grad_output->Dims();
+    int64_t actual_dim = dim < 0 ? dim + grad_dims.size() : dim;
+    CHECK_GE(actual_dim, 0);
+    CHECK_LT(actual_dim, grad_dims.size());
 
-    const int64_t outer_size = std::accumulate(out_dims.begin(), out_dims.begin() + dim, 1, std::multiplies<int64_t>());
-    const int64_t inner_size = std::accumulate(out_dims.begin() + dim, out_dims.end(), 1, std::multiplies<int64_t>());
+    const int64_t num_inputs = grad_dims[actual_dim];
+    std::vector<std::shared_ptr<Tensor>> grads;
+
+    std::vector<int64_t> out_dims = grad_dims;
+    out_dims.erase(out_dims.begin() + actual_dim); // remove stack dim
+
+    const int64_t outer_size
+        = std::accumulate(out_dims.begin(), out_dims.begin() + actual_dim, 1, std::multiplies<int64_t>());
+    const int64_t inner_size
+        = std::accumulate(out_dims.begin() + actual_dim, out_dims.end(), 1, std::multiplies<int64_t>());
+
+    const float *src_base = static_cast<const float *>(grad_output->DataPtr());
 
     for (int i = 0; i < num_inputs; ++i) {
         auto grad = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32);
         float *dst_ptr = static_cast<float *>(grad->DataPtr());
-        const float *src_ptr = static_cast<const float *>(grad_output->DataPtr()) + i * inner_size;
+
         for (int64_t n = 0; n < outer_size; ++n) {
-            memcpy(dst_ptr + n * inner_size, src_ptr + n * num_inputs * inner_size, inner_size * sizeof(float));
+            const float *src_ptr = src_base + (n * num_inputs + i) * inner_size;
+            memcpy(dst_ptr + n * inner_size, src_ptr, inner_size * sizeof(float));
         }
         grads.push_back(grad);
     }

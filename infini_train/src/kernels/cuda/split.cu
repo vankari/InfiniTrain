@@ -130,7 +130,6 @@ std::shared_ptr<Tensor> SplitBackward(const std::vector<int64_t> &input_dims, in
                                                            static_cast<float *>(grad_input->DataPtr()), N, H_in, W,
                                                            split_size, num_splits, device_H_outs);
 
-    // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
     cudaFreeAsync(device_ptr, 0);
     return grad_input;
 }

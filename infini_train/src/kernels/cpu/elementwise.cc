@@ -12,6 +12,26 @@
 
 namespace infini_train::kernels::cpu {
 namespace {
+int64_t CalcOffset(int64_t idx, const std::vector<int64_t> &dims, const std::vector<int64_t> &strides) {
+    int64_t offset = 0;
+    for (size_t i = 0; i < dims.size(); ++i) {
+        int64_t cur = idx % dims[i];
+        offset += cur * strides[i];
+        idx /= dims[i];
+    }
+    return offset;
+}
+
+std::vector<int64_t> ComputeStrides(const std::vector<int64_t> &dims) {
+    std::vector<int64_t> strides(dims.size());
+    int64_t stride = 1;
+    for (int i = dims.size() - 1; i >= 0; --i) {
+        strides[i] = stride;
+        stride *= dims[i];
+    }
+    return strides;
+}
+
 std::shared_ptr<Tensor> UnaryForward(const std::shared_ptr<Tensor> &input, std::function<float(float)> unary_fn) {
     auto output = std::make_shared<Tensor>(input->Dims(), DataType::kFLOAT32);
     for (int64_t idx = 0; idx < output->NumElements(); ++idx) {
@@ -33,14 +53,36 @@ std::shared_ptr<Tensor> UnaryBackward(const std::shared_ptr<Tensor> &grad_output
 
 std::shared_ptr<Tensor> BinaryForward(const std::shared_ptr<Tensor> &a, const std::shared_ptr<Tensor> &b,
                                       std::function<float(float, float)> binary_fn) {
-    // TODO(dcj): Broadcasting will be supported in the future.
-    // Currently, only one-way broadcasting from b to a is assumed by default.
-    CHECK(a->NumElements() >= b->NumElements() && a->NumElements() % b->NumElements() == 0);
+    auto out_dims = a->Dims();
+    auto output = std::make_shared<Tensor>(out_dims, DataType::kFLOAT32);
+    int64_t num_elements = output->NumElements();
 
-    auto output = std::make_shared<Tensor>(a->Dims(), DataType::kFLOAT32);
-    for (int idx = 0; idx < output->NumElements(); ++idx) {
-        static_cast<float *>(output->DataPtr())[idx] = binary_fn(
-            static_cast<float *>(a->DataPtr())[idx], static_cast<float *>(b->DataPtr())[idx % b->NumElements()]);
+    auto a_strides = ComputeStrides(a->Dims());
+    auto b_strides = ComputeStrides(b->Dims());
+    auto out_strides = ComputeStrides(out_dims);
+
+    int ndim = out_dims.size();
+    std::vector<int64_t> a_padded_dims = a->Dims();
+    std::vector<int64_t> b_padded_dims = b->Dims();
+    while (a_padded_dims.size() < ndim) { a_padded_dims.insert(a_padded_dims.begin(), 1); }
+    while (b_padded_dims.size() < ndim) { b_padded_dims.insert(b_padded_dims.begin(), 1); }
+    while (a_strides.size() < ndim) { a_strides.insert(a_strides.begin(), 0); }
+    while (b_strides.size() < ndim) { b_strides.insert(b_strides.begin(), 0); }
+
+    float *out_ptr = static_cast<float *>(output->DataPtr());
+    const float *a_ptr = static_cast<float *>(a->DataPtr());
+    const float *b_ptr = static_cast<float *>(b->DataPtr());
+
+    for (int64_t idx = 0; idx < num_elements; ++idx) {
+        int64_t tmp = idx;
+        int64_t a_offset = 0, b_offset = 0;
+        for (int i = 0; i < ndim; ++i) {
+            int64_t index = tmp / out_strides[i];
+            tmp %= out_strides[i];
+            a_offset += (a_padded_dims[i] == 1 ? 0 : index) * a_strides[i];
+            b_offset += (b_padded_dims[i] == 1 ? 0 : index) * b_strides[i];
+        }
+        out_ptr[idx] = binary_fn(a_ptr[a_offset], b_ptr[b_offset]);
     }
 
     return output;
@@ -50,28 +92,48 @@ std::pair<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
 BinaryBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &a,
                const std::shared_ptr<Tensor> &b, const std::vector<int64_t> &a_dims, const std::vector<int64_t> &b_dims,
                std::function<float(float, float)> fn_a, std::function<float(float, float)> fn_b) {
-    // TODO(dcj): Use broadcast rule instead later.
-    const auto a_num_elements = std::accumulate(a_dims.begin(), a_dims.end(), 1, std::multiplies<int64_t>());
-    const auto b_num_elements = std::accumulate(b_dims.begin(), b_dims.end(), 1, std::multiplies<int64_t>());
+    CHECK(a_dims.size() >= b_dims.size());
 
-    CHECK(a_num_elements >= b_num_elements && a_num_elements % b_num_elements == 0);
+    const int64_t a_num_elements = std::accumulate(a_dims.begin(), a_dims.end(), 1LL, std::multiplies<int64_t>());
+    const int64_t b_num_elements = std::accumulate(b_dims.begin(), b_dims.end(), 1LL, std::multiplies<int64_t>());
+
+    CHECK(a_num_elements == grad_output->NumElements());
     if (a) {
-        CHECK(a_num_elements == a->NumElements());
+        CHECK_EQ(a_num_elements, a->NumElements());
     }
     if (b) {
-        CHECK(b_num_elements == b->NumElements());
+        CHECK_EQ(b_num_elements, b->NumElements());
     }
 
     auto grad_a = std::make_shared<Tensor>(a_dims, DataType::kFLOAT32);
     auto grad_b = std::make_shared<Tensor>(b_dims, DataType::kFLOAT32);
     grad_a->Fill<float>(0.0f);
     grad_b->Fill<float>(0.0f);
-    for (int idx = 0; idx < a_num_elements; ++idx) {
-        const float x = a ? static_cast<float *>(a->DataPtr())[idx] : 0.0f;
-        const float y = b ? static_cast<float *>(b->DataPtr())[idx % b_num_elements] : 0.0f;
-        const float grad = static_cast<float *>(grad_output->DataPtr())[idx];
+
+    std::vector<int64_t> b_ext_dims = b_dims;
+    while (b_ext_dims.size() < a_dims.size()) { b_ext_dims.insert(b_ext_dims.begin(), 1); }
+
+    const auto a_strides = ComputeStrides(a_dims);
+    const auto b_strides = ComputeStrides(b_ext_dims);
+
+    for (int64_t idx = 0; idx < a_num_elements; ++idx) {
+        int64_t tmp = idx;
+        std::vector<int64_t> b_indices(b_ext_dims.size());
+        for (size_t i = 0; i < a_dims.size(); ++i) {
+            int64_t cur = tmp / a_strides[i];
+            tmp %= a_strides[i];
+            b_indices[i] = (b_ext_dims[i] == 1) ? 0 : cur;
+        }
+
+        int64_t b_offset = 0;
+        for (size_t i = 0; i < b_indices.size(); ++i) { b_offset += b_indices[i] * b_strides[i]; }
+
+        const float x = a ? static_cast<const float *>(a->DataPtr())[idx] : 0.0f;
+        const float y = b ? static_cast<const float *>(b->DataPtr())[b_offset] : 0.0f;
+        const float grad = static_cast<const float *>(grad_output->DataPtr())[idx];
+
         static_cast<float *>(grad_a->DataPtr())[idx] = grad * fn_a(x, y);
-        static_cast<float *>(grad_b->DataPtr())[idx % b_num_elements] += grad * fn_b(x, y);
+        static_cast<float *>(grad_b->DataPtr())[b_offset] += grad * fn_b(x, y);
     }
     return {grad_a, grad_b};
 }

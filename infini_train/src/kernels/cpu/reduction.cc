@@ -85,16 +85,15 @@ std::shared_ptr<Tensor> ReduceOpBackwardMask(const std::shared_ptr<Tensor> &inpu
 std::shared_ptr<Tensor> ReduceOpBackward(const std::shared_ptr<Tensor> &grad_output,
                                          const std::vector<int64_t> &input_dims, const int64_t dim, const bool keep_dim,
                                          const std::function<float(float, int64_t)> &scale_fn) {
-    std::vector<int64_t> grad_output_dims = grad_output->Dims();
-    if (!keep_dim) {
-        grad_output_dims.insert(grad_output_dims.begin() + dim, 1);
-    }
+    int64_t actual_dim = dim < 0 ? dim + input_dims.size() : dim;
+    CHECK_GE(actual_dim, 0);
+    CHECK_LT(actual_dim, input_dims.size());
 
     auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32);
 
-    int64_t N = std::accumulate(input_dims.begin(), input_dims.begin() + dim, 1, std::multiplies<int64_t>());
-    int64_t H = input_dims[dim];
-    int64_t W = std::accumulate(input_dims.begin() + dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
+    int64_t N = std::accumulate(input_dims.begin(), input_dims.begin() + actual_dim, 1, std::multiplies<int64_t>());
+    int64_t H = input_dims[actual_dim];
+    int64_t W = std::accumulate(input_dims.begin() + actual_dim + 1, input_dims.end(), 1, std::multiplies<int64_t>());
 
     const float *grad_output_ptr = static_cast<const float *>(grad_output->DataPtr());
     float *grad_input_ptr = static_cast<float *>(grad_input->DataPtr());

@@ -77,7 +77,7 @@ std::shared_ptr<Tensor> SliceForward(const std::shared_ptr<Tensor> &input, const
     SliceForwardKernel<<<num_blocks, threads_per_block>>>(
         static_cast<const float *>(input->DataPtr()), static_cast<float *>(new_tensor->DataPtr()), new_dims_dev,
         starts_dev, steps_dev, input_strides_dev, output_strides_dev, num_dims, total_elements);
-    // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
+
     cudaFreeAsync(new_dims_dev, 0);
 
     return new_tensor;
@@ -158,7 +158,6 @@ std::shared_ptr<Tensor> SliceBackward(const std::shared_ptr<Tensor> &grad_output
         static_cast<const float *>(grad_output->DataPtr()), static_cast<float *>(grad_input->DataPtr()), new_dims_dev,
         starts_dev, steps_dev, input_strides_dev, output_strides_dev, num_dims, total_elements);
 
-    // NOTE(zbl): cudaFree() needs explicit sync when cudaMallocAsync() is called
     cudaFreeAsync(new_dims_dev, 0);
 
     return grad_input;

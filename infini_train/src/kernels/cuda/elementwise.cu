@@ -124,6 +124,12 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
                                                      output->NumElements());
             },
             output, inputs...);
+
+        cudaFreeAsync(device_a_strides, 0);
+        cudaFreeAsync(device_b_strides, 0);
+        cudaFreeAsync(device_out_strides, 0);
+        cudaFreeAsync(device_a_shape, 0);
+        cudaFreeAsync(device_b_shape, 0);
     } else {
         static_assert(sizeof...(inputs) == 1 || sizeof...(inputs) == 2,
                       "LaunchForward currently only supports unary and binary operations.");
