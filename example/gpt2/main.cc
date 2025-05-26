@@ -14,7 +14,7 @@
 #include "infini_train/include/nn/modules/loss.h"
 #include "infini_train/include/optimizer.h"
 
-#include "example/gpt2/dataset.h"
+#include "example/common/tiny_shakespeare_dataset.h"
 #include "example/gpt2/net.h"
 
 // I/O

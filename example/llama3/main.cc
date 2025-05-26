@@ -13,7 +13,7 @@
 #include "infini_train/include/nn/modules/loss.h"
 #include "infini_train/include/optimizer.h"
 
-#include "example/llama3/dataset.h"
+#include "example/common/tiny_shakespeare_dataset.h"
 #include "example/llama3/net.h"
 
 // I/O
