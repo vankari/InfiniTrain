@@ -14,6 +14,9 @@
 #include "infini_train/include/nn/functional.h"
 #include "infini_train/include/nn/modules/loss.h"
 #include "infini_train/include/optimizer.h"
+#ifdef PROFILE_MODE
+#include "infini_train/include/profiler.h"
+#endif
 
 #include "example/gpt2/dataset.h"
 #include "example/gpt2/net.h"
@@ -162,6 +165,9 @@ int main(int argc, char *argv[]) {
             // train_loader.Reset();
         }
         float lossf = 0.0f;
+#ifdef PROFILE_MODE
+        Profiler::Instance().SetTag("Step " + std::to_string(step));
+#endif
         for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
             // (bs, seq_len), (bs, seq_len)
             auto [x, y] = *train_iter;
@@ -198,6 +204,10 @@ int main(int argc, char *argv[]) {
             tokenizer->GenerateText(*model, FLAGS_batch_size, FLAGS_sequence_length, FLAGS_text_length, device);
         }
     }
+#ifdef PROFILE_MODE
+    Profiler::Instance().Report("gpt2.report", Profiler::SortBy::DeviceTimePercentage);
+    Profiler::Instance().PrintRecords("records.log");
+#endif
 
     gflags::ShutDownCommandLineFlags();
     google::ShutdownGoogleLogging();
