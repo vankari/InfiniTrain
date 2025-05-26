@@ -91,7 +91,7 @@ public:
     Forward(const std::vector<std::shared_ptr<infini_train::Tensor>> &x) override;
 
 private:
-    int64_t hidden_dim_;
+    int64_t hidden_dim_ = 0;
 };
 
 class Block : public infini_train::nn::Module {

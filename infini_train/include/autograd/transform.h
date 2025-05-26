@@ -17,7 +17,7 @@ public:
     std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
 
 private:
-    int64_t diagonal_;
+    int64_t diagonal_ = 0;
 };
 
 class Triu : public Function {
@@ -29,7 +29,7 @@ public:
     std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
 
 private:
-    int64_t diagonal_;
+    int64_t diagonal_ = 0;
 };
 
 class Transpose : public Function {
@@ -41,8 +41,8 @@ public:
     std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
 
 private:
-    int64_t dim0_;
-    int64_t dim1_;
+    int64_t dim0_ = 0;
+    int64_t dim1_ = 0;
 };
 
 class Mask : public Function {
@@ -55,7 +55,7 @@ public:
 
 private:
     std::shared_ptr<Tensor> mask_;
-    float value_;
+    float value_ = 0.f;
 };
 
 class RepeatInterleave : public Function {
@@ -70,8 +70,8 @@ public:
     std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
 
 private:
-    int64_t repeat_;
-    int64_t dim_;
+    int64_t repeat_ = 0;
+    int64_t dim_ = 0;
     std::vector<int64_t> input_dims_;
 };
 

@@ -69,7 +69,7 @@ public:
     std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
 
 private:
-    int64_t dim_;
+    int64_t dim_ = 0;
     std::vector<int64_t> input_dims_;
 };
 } // namespace infini_train::autograd

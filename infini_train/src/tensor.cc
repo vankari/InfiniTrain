@@ -303,6 +303,7 @@ std::shared_ptr<Tensor> Tensor::Matmul(const std::shared_ptr<Tensor> &other) {
 }
 
 std::shared_ptr<Tensor> Tensor::Outer(const std::shared_ptr<Tensor> &other) {
+    // TODO(zbl): Use Reshape + MatMul
     return std::make_shared<autograd::Outer>()->Apply({shared_from_this(), other})[0];
 }
 

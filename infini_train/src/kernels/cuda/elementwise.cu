@@ -21,8 +21,8 @@ __global__ void UnaryForwardKernel(T *output, Func fn, size_t num_elements, size
 }
 
 // Helper for broadcast indexing
-__device__ inline int64_t calc_offset(int64_t idx, int ndim, const int64_t *strides, const int64_t *shape,
-                                      const int64_t *out_strides) {
+__device__ inline int64_t CalcOffset(int64_t idx, int ndim, const int64_t *strides, const int64_t *shape,
+                                     const int64_t *out_strides) {
     int64_t offset = 0;
     for (int i = 0; i < ndim; ++i) {
         int64_t out_index = (idx / out_strides[i]) % shape[i];
@@ -41,8 +41,8 @@ __global__ void BinaryForwardKernel(T *output, Func fn, int ndim, const int64_t 
         return;
     }
 
-    int64_t a_offset = calc_offset(idx, ndim, a_strides, a_shape, out_strides);
-    int64_t b_offset = calc_offset(idx, ndim, b_strides, b_shape, out_strides);
+    int64_t a_offset = CalcOffset(idx, ndim, a_strides, a_shape, out_strides);
+    int64_t b_offset = CalcOffset(idx, ndim, b_strides, b_shape, out_strides);
 
     output[idx] = fn(a[a_offset], b[b_offset]);
 }
@@ -158,8 +158,8 @@ __global__ void BinaryBackwardKernel(T *output_a, T *output_b, FuncA fn_a, FuncB
         return;
     }
 
-    int64_t a_offset = calc_offset(idx, ndim, a_strides, a_shape, out_strides);
-    int64_t b_offset = calc_offset(idx, ndim, b_strides, b_shape, out_strides);
+    int64_t a_offset = CalcOffset(idx, ndim, a_strides, a_shape, out_strides);
+    int64_t b_offset = CalcOffset(idx, ndim, b_strides, b_shape, out_strides);
 
     const T a_val = input_a ? input_a[a_offset] : T(0);
     const T b_val = input_b ? input_b[b_offset] : T(0);
