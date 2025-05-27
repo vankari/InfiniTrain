@@ -12,16 +12,6 @@
 
 namespace infini_train::kernels::cpu {
 namespace {
-int64_t CalcOffset(int64_t idx, const std::vector<int64_t> &dims, const std::vector<int64_t> &strides) {
-    int64_t offset = 0;
-    for (size_t i = 0; i < dims.size(); ++i) {
-        int64_t cur = idx % dims[i];
-        offset += cur * strides[i];
-        idx /= dims[i];
-    }
-    return offset;
-}
-
 std::vector<int64_t> ComputeStrides(const std::vector<int64_t> &dims) {
     std::vector<int64_t> strides(dims.size());
     int64_t stride = 1;
@@ -53,36 +43,32 @@ std::shared_ptr<Tensor> UnaryBackward(const std::shared_ptr<Tensor> &grad_output
 
 std::shared_ptr<Tensor> BinaryForward(const std::shared_ptr<Tensor> &a, const std::shared_ptr<Tensor> &b,
                                       std::function<float(float, float)> binary_fn) {
+    // Currently a and b should have the same data type and only one-way broadcasting from b to a is assumed by default
+    CHECK(a->Dtype() == b->Dtype() && a->NumElements() >= b->NumElements() && a->NumElements() % b->NumElements() == 0);
     auto out_dims = a->Dims();
     auto output = std::make_shared<Tensor>(out_dims, DataType::kFLOAT32);
     int64_t num_elements = output->NumElements();
 
-    auto a_strides = ComputeStrides(a->Dims());
-    auto b_strides = ComputeStrides(b->Dims());
     auto out_strides = ComputeStrides(out_dims);
+    auto b_strides = ComputeStrides(b->Dims());
 
     int ndim = out_dims.size();
-    std::vector<int64_t> a_padded_dims = a->Dims();
     std::vector<int64_t> b_padded_dims = b->Dims();
-    while (a_padded_dims.size() < ndim) { a_padded_dims.insert(a_padded_dims.begin(), 1); }
-    while (b_padded_dims.size() < ndim) { b_padded_dims.insert(b_padded_dims.begin(), 1); }
-    while (a_strides.size() < ndim) { a_strides.insert(a_strides.begin(), 0); }
-    while (b_strides.size() < ndim) { b_strides.insert(b_strides.begin(), 0); }
+    b_padded_dims.insert(b_padded_dims.begin(), ndim - b_padded_dims.size(), 1);
+    b_strides.insert(b_strides.begin(), ndim - b_strides.size(), 0);
 
     float *out_ptr = static_cast<float *>(output->DataPtr());
     const float *a_ptr = static_cast<float *>(a->DataPtr());
     const float *b_ptr = static_cast<float *>(b->DataPtr());
 
     for (int64_t idx = 0; idx < num_elements; ++idx) {
-        int64_t tmp = idx;
-        int64_t a_offset = 0, b_offset = 0;
+        int64_t tmp = idx, b_offset = 0;
         for (int i = 0; i < ndim; ++i) {
             int64_t index = tmp / out_strides[i];
             tmp %= out_strides[i];
-            a_offset += (a_padded_dims[i] == 1 ? 0 : index) * a_strides[i];
             b_offset += (b_padded_dims[i] == 1 ? 0 : index) * b_strides[i];
         }
-        out_ptr[idx] = binary_fn(a_ptr[a_offset], b_ptr[b_offset]);
+        out_ptr[idx] = binary_fn(a_ptr[idx], b_ptr[b_offset]);
     }
 
     return output;
@@ -92,6 +78,7 @@ std::pair<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
 BinaryBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr<Tensor> &a,
                const std::shared_ptr<Tensor> &b, const std::vector<int64_t> &a_dims, const std::vector<int64_t> &b_dims,
                std::function<float(float, float)> fn_a, std::function<float(float, float)> fn_b) {
+    // Currently a and b should have the same data type and only one-way broadcasting from b to a is assumed by default
     CHECK(a_dims.size() >= b_dims.size());
 
     const int64_t a_num_elements = std::accumulate(a_dims.begin(), a_dims.end(), 1LL, std::multiplies<int64_t>());
@@ -110,23 +97,20 @@ BinaryBackward(const std::shared_ptr<Tensor> &grad_output, const std::shared_ptr
     grad_a->Fill<float>(0.0f);
     grad_b->Fill<float>(0.0f);
 
-    std::vector<int64_t> b_ext_dims = b_dims;
-    while (b_ext_dims.size() < a_dims.size()) { b_ext_dims.insert(b_ext_dims.begin(), 1); }
-
-    const auto a_strides = ComputeStrides(a_dims);
-    const auto b_strides = ComputeStrides(b_ext_dims);
+    int ndim = a_dims.size();
+    auto out_strides = ComputeStrides(a_dims);
+    auto b_strides = ComputeStrides(b_dims);
+    std::vector<int64_t> b_padded_dims = b_dims;
+    b_padded_dims.insert(b_padded_dims.begin(), ndim - b_dims.size(), 1);
+    b_strides.insert(b_strides.begin(), ndim - b_strides.size(), 0);
 
     for (int64_t idx = 0; idx < a_num_elements; ++idx) {
-        int64_t tmp = idx;
-        std::vector<int64_t> b_indices(b_ext_dims.size());
-        for (size_t i = 0; i < a_dims.size(); ++i) {
-            int64_t cur = tmp / a_strides[i];
-            tmp %= a_strides[i];
-            b_indices[i] = (b_ext_dims[i] == 1) ? 0 : cur;
+        int64_t tmp = idx, b_offset = 0;
+        for (size_t i = 0; i < ndim; ++i) {
+            int64_t index = tmp / out_strides[i];
+            tmp %= out_strides[i];
+            b_offset += (b_padded_dims[i] == 1 ? 0 : index) * b_strides[i];
         }
-
-        int64_t b_offset = 0;
-        for (size_t i = 0; i < b_indices.size(); ++i) { b_offset += b_indices[i] * b_strides[i]; }
 
         const float x = a ? static_cast<const float *>(a->DataPtr())[idx] : 0.0f;
         const float y = b ? static_cast<const float *>(b->DataPtr())[b_offset] : 0.0f;
