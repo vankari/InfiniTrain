@@ -5,6 +5,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef USE_CUDA
+#include "cuda_runtime.h"
+#endif
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 
@@ -12,6 +15,9 @@
 #include "infini_train/include/device.h"
 #include "infini_train/include/nn/modules/loss.h"
 #include "infini_train/include/optimizer.h"
+#ifdef PROFILE_MODE
+#include "infini_train/include/profiler.h"
+#endif
 
 #include "example/common/tiny_shakespeare_dataset.h"
 #include "example/llama3/net.h"
@@ -56,6 +62,17 @@ DEFINE_validator(device,
 int main(int argc, char *argv[]) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
+
+#ifdef USE_CUDA
+    cudaMemPool_t memPool;
+    cudaDeviceGetMemPool(&memPool, 0);
+    size_t setVal = UINT64_MAX;
+    cudaMemPoolSetAttribute(memPool, cudaMemPoolAttrReleaseThreshold, &setVal);
+
+    float *tmp;
+    cudaMallocAsync(&tmp, 70LL << 30, 0);
+    cudaFreeAsync(tmp, 0);
+#endif
 
     // select the device
     Device device;
@@ -135,6 +152,9 @@ int main(int argc, char *argv[]) {
             // train_loader.Reset();
         }
         float lossf = 0.0f;
+#ifdef PROFILE_MODE
+        Profiler::Instance().SetTag("Step_" + std::to_string(step));
+#endif
         for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
             // (bs, seq_len), (bs, seq_len)
             auto [x, y] = *train_iter;
@@ -164,6 +184,10 @@ int main(int argc, char *argv[]) {
         LOG(ERROR) << std::format("step {:4d}/{} | train loss {:.6f} | lr {:.2e} | ({:.2f} ms | {:.0f} tok/s)",
                                   step + 1, FLAGS_num_iteration, lossf, FLAGS_learning_rate, duration_us / 1e3f, tps);
     }
+#ifdef PROFILE_MODE
+    Profiler::Instance().Report("llama3.report", Profiler::SortBy::DeviceTimePercentage);
+    Profiler::Instance().PrintRecords("llama3.records.log");
+#endif
 
     gflags::ShutDownCommandLineFlags();
     google::ShutdownGoogleLogging();

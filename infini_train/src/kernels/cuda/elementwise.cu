@@ -104,18 +104,24 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
         auto b_stride_host = ComputeStride(b_shape);
         auto out_stride_host = ComputeStride(out_shape);
 
-        int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
-        cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t), 0);
-        cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t), 0);
-        cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t), 0);
-        cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t), 0);
-        cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t), 0);
+        int64_t *device_buffer;
+        cudaMallocAsync(&device_buffer, 5 * ndim * sizeof(int64_t), 0);
 
-        cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-        cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-        cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-        cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-        cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+        int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
+        device_a_strides = device_buffer + ndim * 0;
+        device_b_strides = device_buffer + ndim * 1;
+        device_out_strides = device_buffer + ndim * 2;
+        device_a_shape = device_buffer + ndim * 3;
+        device_b_shape = device_buffer + ndim * 4;
+
+        std::vector<int64_t> host_buffer;
+        host_buffer.insert(host_buffer.end(), a_stride_host.begin(), a_stride_host.end());
+        host_buffer.insert(host_buffer.end(), b_stride_host.begin(), b_stride_host.end());
+        host_buffer.insert(host_buffer.end(), out_stride_host.begin(), out_stride_host.end());
+        host_buffer.insert(host_buffer.end(), a_shape.begin(), a_shape.end());
+        host_buffer.insert(host_buffer.end(), b_shape.begin(), b_shape.end());
+
+        cudaMemcpyAsync(device_buffer, host_buffer.data(), 5 * ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
 
         LaunchKernel<BLOCK_SIZE, T>(
             [&](dim3 grid, dim3 block, size_t offset, const T *a_ptr, const T *b_ptr) {
@@ -125,11 +131,7 @@ void LaunchForward(Func func, const std::shared_ptr<Tensor> &output, const Input
             },
             output, inputs...);
 
-        cudaFreeAsync(device_a_strides, 0);
-        cudaFreeAsync(device_b_strides, 0);
-        cudaFreeAsync(device_out_strides, 0);
-        cudaFreeAsync(device_a_shape, 0);
-        cudaFreeAsync(device_b_shape, 0);
+        cudaFreeAsync(device_buffer, 0);
     } else {
         static_assert(sizeof...(inputs) == 1 || sizeof...(inputs) == 2,
                       "LaunchForward currently only supports unary and binary operations.");
@@ -204,18 +206,24 @@ void LaunchBackward(FuncA fun_a, FuncB fun_b, const std::shared_ptr<Tensor> &out
     auto b_stride_host = ComputeStride(b_shape);
     auto out_stride_host = ComputeStride(out_shape);
 
-    int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
-    cudaMallocAsync(&device_a_strides, ndim * sizeof(int64_t), 0);
-    cudaMallocAsync(&device_b_strides, ndim * sizeof(int64_t), 0);
-    cudaMallocAsync(&device_out_strides, ndim * sizeof(int64_t), 0);
-    cudaMallocAsync(&device_a_shape, ndim * sizeof(int64_t), 0);
-    cudaMallocAsync(&device_b_shape, ndim * sizeof(int64_t), 0);
+    int64_t *device_buffer;
+    cudaMallocAsync(&device_buffer, 5 * ndim * sizeof(int64_t), 0);
 
-    cudaMemcpyAsync(device_a_strides, a_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-    cudaMemcpyAsync(device_b_strides, b_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-    cudaMemcpyAsync(device_out_strides, out_stride_host.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-    cudaMemcpyAsync(device_a_shape, a_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
-    cudaMemcpyAsync(device_b_shape, b_shape.data(), ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
+    int64_t *device_a_strides, *device_b_strides, *device_out_strides, *device_a_shape, *device_b_shape;
+    device_a_strides = device_buffer + ndim * 0;
+    device_b_strides = device_buffer + ndim * 1;
+    device_out_strides = device_buffer + ndim * 2;
+    device_a_shape = device_buffer + ndim * 3;
+    device_b_shape = device_buffer + ndim * 4;
+
+    std::vector<int64_t> host_buffer;
+    host_buffer.insert(host_buffer.end(), a_stride_host.begin(), a_stride_host.end());
+    host_buffer.insert(host_buffer.end(), b_stride_host.begin(), b_stride_host.end());
+    host_buffer.insert(host_buffer.end(), out_stride_host.begin(), out_stride_host.end());
+    host_buffer.insert(host_buffer.end(), a_shape.begin(), a_shape.end());
+    host_buffer.insert(host_buffer.end(), b_shape.begin(), b_shape.end());
+
+    cudaMemcpyAsync(device_buffer, host_buffer.data(), 5 * ndim * sizeof(int64_t), cudaMemcpyHostToDevice, 0);
 
     const size_t num_elements = grad_output->NumElements();
     LaunchKernel<BLOCK_SIZE, T>(
@@ -226,11 +234,7 @@ void LaunchBackward(FuncA fun_a, FuncB fun_b, const std::shared_ptr<Tensor> &out
         },
         output_a, inputs...);
 
-    cudaFreeAsync(device_a_strides, 0);
-    cudaFreeAsync(device_b_strides, 0);
-    cudaFreeAsync(device_out_strides, 0);
-    cudaFreeAsync(device_a_shape, 0);
-    cudaFreeAsync(device_b_shape, 0);
+    cudaFreeAsync(device_buffer, 0);
 }
 
 template <typename Func> std::shared_ptr<Tensor> UnaryForward(const std::shared_ptr<Tensor> &input, Func unary_fn) {
