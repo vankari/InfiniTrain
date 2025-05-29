@@ -96,8 +96,10 @@ public:
     std::shared_ptr<Tensor> Equals(float scalar);
     std::shared_ptr<Tensor> Add(const std::shared_ptr<Tensor> &other);
     std::shared_ptr<Tensor> Add(float scalar);
+    std::shared_ptr<Tensor> Sub(const std::shared_ptr<Tensor> &other);
     std::shared_ptr<Tensor> Mul(const std::shared_ptr<Tensor> &other);
     std::shared_ptr<Tensor> Mul(float scalar);
+    std::shared_ptr<Tensor> Div(const std::shared_ptr<Tensor> &other);
     std::shared_ptr<Tensor> Neg();
     std::shared_ptr<Tensor> Reciprocal();
     std::shared_ptr<Tensor> Sin();

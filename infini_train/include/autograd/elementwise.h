@@ -136,6 +136,22 @@ private:
     const float scalar_ = 0.0f;
 };
 
+class Sub : public Function {
+public:
+    static constexpr char kType[] = "SubFunction";
+
+    explicit Sub() : Function(kType) {}
+
+    std::vector<std::shared_ptr<Tensor>> Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) override;
+    void SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
+                      const std::vector<std::shared_ptr<Tensor>> &output_tensors) override;
+    std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
+
+private:
+    std::vector<int64_t> a_dims_;
+    std::vector<int64_t> b_dims_;
+};
+
 class Mul : public Function {
 public:
     static constexpr char kType[] = "MulFunction";
@@ -160,4 +176,17 @@ public:
 private:
     const float scalar_ = 0.0f;
 };
+
+class Div : public Function {
+public:
+    static constexpr char kType[] = "DivFunction";
+
+    explicit Div() : Function(kType) {}
+
+    std::vector<std::shared_ptr<Tensor>> Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) override;
+    void SetupContext(const std::vector<std::shared_ptr<Tensor>> &input_tensors,
+                      const std::vector<std::shared_ptr<Tensor>> &output_tensors) override;
+    std::vector<std::shared_ptr<Tensor>> Backward(const std::vector<std::shared_ptr<Tensor>> &grad_outputs) override;
+};
+
 } // namespace infini_train::autograd

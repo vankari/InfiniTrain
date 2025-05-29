@@ -216,6 +216,18 @@ std::shared_ptr<Tensor> AddScalarBackward(const std::shared_ptr<Tensor> &grad_ou
     return UnaryBackward(grad_output, nullptr, [](float) { return 1.0f; });
 }
 
+std::shared_ptr<Tensor> SubForward(const std::shared_ptr<Tensor> &a, const std::shared_ptr<Tensor> &b) {
+    return BinaryForward(a, b, [](float x, float y) { return x - y; });
+}
+
+std::pair<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>> SubBackward(const std::shared_ptr<Tensor> &grad_output,
+                                                                        const std::vector<int64_t> &a_dims,
+                                                                        const std::vector<int64_t> &b_dims) {
+    return BinaryBackward(
+        grad_output, nullptr, nullptr, a_dims, b_dims, [](float, float) { return 1.f; },
+        [](float, float) { return -1.f; });
+}
+
 std::shared_ptr<Tensor> MulForward(const std::shared_ptr<Tensor> &a, const std::shared_ptr<Tensor> &b) {
     return BinaryForward(a, b, [](float x, float y) { return x * y; });
 }
@@ -233,6 +245,18 @@ std::shared_ptr<Tensor> MulScalarForward(const std::shared_ptr<Tensor> &a, float
 
 std::shared_ptr<Tensor> MulScalarBackward(const std::shared_ptr<Tensor> &grad_output, float scalar) {
     return UnaryBackward(grad_output, nullptr, [scalar](float) { return scalar; });
+}
+
+std::shared_ptr<Tensor> DivForward(const std::shared_ptr<Tensor> &a, const std::shared_ptr<Tensor> &b) {
+    return BinaryForward(a, b, [](float x, float y) { return x / y; });
+}
+
+std::pair<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>> DivBackward(const std::shared_ptr<Tensor> &grad_output,
+                                                                        const std::shared_ptr<Tensor> &a,
+                                                                        const std::shared_ptr<Tensor> &b) {
+    return BinaryBackward(
+        grad_output, a, b, a->Dims(), b->Dims(), [](float, float y) { return 1 / y; },
+        [](float x, float y) { return -x / (y * y); });
 }
 
 } // namespace infini_train::kernels::cpu
@@ -259,9 +283,13 @@ REGISTER_CPU_ELEMENTWISE_KERNEL(AddForward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(AddBackward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(AddScalarForward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(AddScalarBackward)
+REGISTER_CPU_ELEMENTWISE_KERNEL(SubForward)
+REGISTER_CPU_ELEMENTWISE_KERNEL(SubBackward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(MulForward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(MulBackward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(MulScalarForward)
 REGISTER_CPU_ELEMENTWISE_KERNEL(MulScalarBackward)
+REGISTER_CPU_ELEMENTWISE_KERNEL(DivForward)
+REGISTER_CPU_ELEMENTWISE_KERNEL(DivBackward)
 
 #undef REGISTER_CPU_ELEMENTWISE_KERNEL

@@ -224,6 +224,11 @@ std::shared_ptr<Tensor> Tensor::Add(float scalar) {
     return std::make_shared<autograd::AddScalar>(scalar)->Apply({shared_from_this()})[0];
 }
 
+std::shared_ptr<Tensor> Tensor::Sub(const std::shared_ptr<Tensor> &other) {
+    CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
+    return std::make_shared<autograd::Sub>()->Apply({shared_from_this(), other})[0];
+}
+
 std::shared_ptr<Tensor> Tensor::Mul(const std::shared_ptr<Tensor> &other) {
     CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
     return std::make_shared<autograd::Mul>()->Apply({shared_from_this(), other})[0];
@@ -231,6 +236,11 @@ std::shared_ptr<Tensor> Tensor::Mul(const std::shared_ptr<Tensor> &other) {
 
 std::shared_ptr<Tensor> Tensor::Mul(float scalar) {
     return std::make_shared<autograd::MulScalar>(scalar)->Apply({shared_from_this()})[0];
+}
+
+std::shared_ptr<Tensor> Tensor::Div(const std::shared_ptr<Tensor> &other) {
+    CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
+    return std::make_shared<autograd::Div>()->Apply({shared_from_this(), other})[0];
 }
 
 std::shared_ptr<Tensor> Tensor::Neg() { return std::make_shared<autograd::Neg>()->Apply({shared_from_this()})[0]; }
@@ -398,7 +408,7 @@ std::shared_ptr<Tensor> operator+(float scalar, const std::shared_ptr<Tensor> &t
 std::shared_ptr<Tensor> operator+(const std::shared_ptr<Tensor> &t, float scalar) { return t->Add(scalar); }
 
 std::shared_ptr<Tensor> operator-(const std::shared_ptr<Tensor> &t1, const std::shared_ptr<Tensor> &t2) {
-    return t1->Add(t2->Neg());
+    return t1->Sub(t2);
 }
 
 std::shared_ptr<Tensor> operator-(float scalar, const std::shared_ptr<Tensor> &t) { return t->Neg()->Add(scalar); }
@@ -416,7 +426,7 @@ std::shared_ptr<Tensor> operator*(float scalar, const std::shared_ptr<Tensor> &t
 std::shared_ptr<Tensor> operator*(const std::shared_ptr<Tensor> &t, float scalar) { return t->Mul(scalar); }
 
 std::shared_ptr<Tensor> operator/(const std::shared_ptr<Tensor> &t1, const std::shared_ptr<Tensor> &t2) {
-    return t1->Mul(t2->Reciprocal());
+    return t1->Div(t2);
 }
 
 std::shared_ptr<Tensor> operator/(float scalar, const std::shared_ptr<Tensor> &t) {
