@@ -63,17 +63,6 @@ int main(int argc, char *argv[]) {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
     google::InitGoogleLogging(argv[0]);
 
-#ifdef USE_CUDA
-    cudaMemPool_t memPool;
-    cudaDeviceGetMemPool(&memPool, 0);
-    size_t setVal = UINT64_MAX;
-    cudaMemPoolSetAttribute(memPool, cudaMemPoolAttrReleaseThreshold, &setVal);
-
-    float *tmp;
-    cudaMallocAsync(&tmp, 70LL << 30, 0);
-    cudaFreeAsync(tmp, 0);
-#endif
-
     // select the device
     Device device;
     if (FLAGS_device == kDeviceCPU) {

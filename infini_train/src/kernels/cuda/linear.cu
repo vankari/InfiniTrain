@@ -1,5 +1,6 @@
 #include "cublas_v2.h"
 #include "glog/logging.h"
+#include <cub/block/block_reduce.cuh>
 
 #include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
@@ -230,10 +231,21 @@ std::shared_ptr<Tensor> LinearForward(const std::shared_ptr<Tensor> &input, cons
     return output;
 }
 
-__global__ void set_ones(float *data, int num_elements) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < num_elements) {
-        data[idx] = 1.0f;
+template <int BLOCK_SIZE>
+__global__ void ReduceColumnsKernel(const float *__restrict__ input, float *__restrict__ output, int num_rows,
+                                    int num_cols) {
+    using BlockReduce = cub::BlockReduce<float, BLOCK_SIZE>;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    int row = blockIdx.x;
+    float sum = 0.0f;
+
+    for (int col = threadIdx.x; col < num_cols; col += blockDim.x) { sum += input[row * num_cols + col]; }
+
+    float reduced = BlockReduce(temp_storage).Sum(sum);
+
+    if (threadIdx.x == 0) {
+        output[row] = reduced;
     }
 }
 
@@ -310,19 +322,13 @@ LinearBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     }
 
     // d_bias = \sum_i(i=0, bs-1) d_output[i]
-    // TODO(dcj): use thrust::fill or reduce kernel do this
     if (bias) {
-        auto ones = std::make_shared<Tensor>(std::vector<int64_t>{bs}, DataType::kFLOAT32, grad_output->GetDevice());
-        float *ones_ptr = static_cast<float *>(ones->DataPtr());
-
-        int threads_per_block = 256;
-        int num_blocks = (bs + threads_per_block - 1) / threads_per_block;
-
-        set_ones<<<num_blocks, threads_per_block>>>(ones_ptr, bs);
-
-        CUBLAS_CHECK(cublasSgemv(
-            handle, CUBLAS_OP_N, out_features, bs, &alpha, static_cast<const float *>(grad_output->DataPtr()),
-            out_features, static_cast<float *>(ones_ptr), 1, &beta, static_cast<float *>(grad_bias->DataPtr()), 1));
+        constexpr int BLOCK_SIZE = 256;
+        int threads_per_block = BLOCK_SIZE;
+        int num_blocks = out_features;
+        ReduceColumnsKernel<BLOCK_SIZE>
+            <<<num_blocks, threads_per_block>>>(static_cast<const float *>(grad_output->DataPtr()),
+                                                static_cast<float *>(grad_bias->DataPtr()), out_features, bs);
     }
 
     CUBLAS_CHECK(cublasDestroy(handle));
