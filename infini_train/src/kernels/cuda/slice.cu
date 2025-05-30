@@ -18,7 +18,7 @@ __global__ void SliceForwardKernel(const float *input, float *output, const int6
         in_index += (starts[i] + idx * steps[i]) * in_strides[i];
     }
 
-    atomicAdd(&output[out_idx], input[in_index]);
+    output[out_idx] = input[in_index];
 }
 
 std::shared_ptr<Tensor> SliceForward(const std::shared_ptr<Tensor> &input, const std::vector<int64_t> &starts,
