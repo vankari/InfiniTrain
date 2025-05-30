@@ -18,6 +18,7 @@
 #include "infini_train/include/autograd/elementwise.h"
 #include "infini_train/include/autograd/matmul.h"
 #include "infini_train/include/autograd/misc.h"
+#include "infini_train/include/autograd/outer.h"
 #include "infini_train/include/autograd/transform.h"
 #include "infini_train/include/device.h"
 #include "infini_train/include/dispatcher.h"
@@ -223,6 +224,11 @@ std::shared_ptr<Tensor> Tensor::Add(float scalar) {
     return std::make_shared<autograd::AddScalar>(scalar)->Apply({shared_from_this()})[0];
 }
 
+std::shared_ptr<Tensor> Tensor::Sub(const std::shared_ptr<Tensor> &other) {
+    CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
+    return std::make_shared<autograd::Sub>()->Apply({shared_from_this(), other})[0];
+}
+
 std::shared_ptr<Tensor> Tensor::Mul(const std::shared_ptr<Tensor> &other) {
     CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
     return std::make_shared<autograd::Mul>()->Apply({shared_from_this(), other})[0];
@@ -232,14 +238,35 @@ std::shared_ptr<Tensor> Tensor::Mul(float scalar) {
     return std::make_shared<autograd::MulScalar>(scalar)->Apply({shared_from_this()})[0];
 }
 
+std::shared_ptr<Tensor> Tensor::Div(const std::shared_ptr<Tensor> &other) {
+    CHECK_EQ(static_cast<int>(GetDevice().Type()), static_cast<int>(other->GetDevice().Type()));
+    return std::make_shared<autograd::Div>()->Apply({shared_from_this(), other})[0];
+}
+
+std::shared_ptr<Tensor> Tensor::Neg() { return std::make_shared<autograd::Neg>()->Apply({shared_from_this()})[0]; }
+
+std::shared_ptr<Tensor> Tensor::Reciprocal() {
+    return std::make_shared<autograd::Reciprocal>()->Apply({shared_from_this()})[0];
+}
+
+std::shared_ptr<Tensor> Tensor::Sin() { return std::make_shared<autograd::Sin>()->Apply({shared_from_this()})[0]; }
+
+std::shared_ptr<Tensor> Tensor::Cos() { return std::make_shared<autograd::Cos>()->Apply({shared_from_this()})[0]; }
+
 std::shared_ptr<Tensor> Tensor::Tanh() { return std::make_shared<autograd::Tanh>()->Apply({shared_from_this()})[0]; }
 
 std::shared_ptr<Tensor> Tensor::Pow(float exponent) {
     return std::make_shared<autograd::Pow>(exponent)->Apply({shared_from_this()})[0];
 }
 
+std::shared_ptr<Tensor> Tensor::Rsqrt() { return std::make_shared<autograd::Rsqrt>()->Apply({shared_from_this()})[0]; }
+
 std::vector<std::shared_ptr<Tensor>> Tensor::Split(int split_size, int dim) {
     return std::make_shared<autograd::Split>(split_size, dim)->Apply({shared_from_this()});
+}
+
+std::shared_ptr<Tensor> Tensor::RepeatInterleave(int64_t repeat, int64_t dim) {
+    return std::make_shared<autograd::RepeatInterleave>(repeat, dim)->Apply({shared_from_this()})[0];
 }
 
 std::shared_ptr<Tensor> Tensor::View(const std::vector<int64_t> &dims) {
@@ -250,9 +277,62 @@ std::shared_ptr<Tensor> Tensor::Contiguous() {
     return std::make_shared<autograd::NoOp>(dims_)->Apply({shared_from_this()})[0];
 }
 
+std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
+    auto ndim = dims_.size();
+    auto start_dim = start >= 0 ? start : start + ndim;
+    auto end_dim = end >= 0 ? end : end + ndim;
+    CHECK(start_dim >= 0 && end_dim >= start_dim && end_dim <= ndim);
+
+    std::vector<int64_t> new_shape;
+    int64_t flatten_size = 1;
+    for (int64_t i = 0; i < ndim; ++i) {
+        if (i < start_dim || i > end_dim) {
+            new_shape.push_back(dims_[i]);
+        } else {
+            flatten_size *= dims_[i];
+            if (i == end_dim) {
+                new_shape.push_back(flatten_size);
+            }
+        }
+    }
+
+    return Contiguous()->View(new_shape);
+}
+
+std::shared_ptr<Tensor> Tensor::Squeeze(int64_t dim) {
+    std::vector<int64_t> new_shape = dims_;
+    if (dim < 0) {
+        dim += new_shape.size();
+    }
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, new_shape.size());
+    CHECK_EQ(new_shape[dim], 1) << "Cannot squeeze dim " << dim << " because size (" << new_shape[dim] << ") != 1.";
+
+    new_shape.erase(new_shape.begin() + dim);
+
+    return Contiguous()->View(new_shape);
+}
+
 std::shared_ptr<Tensor> Tensor::Slice(const std::vector<int64_t> &starts, const std::vector<int64_t> &ends,
                                       const std::vector<int64_t> &steps) {
     return std::make_shared<autograd::Slice>(starts, ends, steps)->Apply({shared_from_this()})[0];
+}
+
+std::shared_ptr<Tensor> Tensor::Slice(int64_t dim, int64_t start, int64_t end, int64_t step) {
+    // Slice only on one dimension
+    if (dim < 0) {
+        dim += dims_.size();
+    }
+    CHECK_GE(dim, 0);
+    CHECK_LT(dim, dims_.size());
+    std::vector<int64_t> starts(dims_.size(), 0);
+    std::vector<int64_t> ends = dims_;
+    std::vector<int64_t> steps(dims_.size(), 1);
+
+    starts[dim] = start;
+    ends[dim] = end;
+    steps[dim] = step;
+    return Slice(starts, ends, steps);
 }
 
 std::shared_ptr<Tensor> Tensor::Transpose(int dim0, int dim1) {
@@ -265,6 +345,11 @@ std::shared_ptr<Tensor> Tensor::MaskedFill(const std::shared_ptr<Tensor> &mask, 
 
 std::shared_ptr<Tensor> Tensor::Matmul(const std::shared_ptr<Tensor> &other) {
     return std::make_shared<autograd::Matmul>()->Apply({shared_from_this(), other})[0];
+}
+
+std::shared_ptr<Tensor> Tensor::Outer(const std::shared_ptr<Tensor> &other) {
+    // TODO(zbl): Use Reshape + MatMul
+    return std::make_shared<autograd::Outer>()->Apply({shared_from_this(), other})[0];
 }
 
 // distribution
@@ -320,6 +405,18 @@ std::shared_ptr<Tensor> operator+(const std::shared_ptr<Tensor> &t1, const std::
 
 std::shared_ptr<Tensor> operator+(float scalar, const std::shared_ptr<Tensor> &t) { return t->Add(scalar); }
 
+std::shared_ptr<Tensor> operator+(const std::shared_ptr<Tensor> &t, float scalar) { return t->Add(scalar); }
+
+std::shared_ptr<Tensor> operator-(const std::shared_ptr<Tensor> &t1, const std::shared_ptr<Tensor> &t2) {
+    return t1->Sub(t2);
+}
+
+std::shared_ptr<Tensor> operator-(float scalar, const std::shared_ptr<Tensor> &t) { return t->Neg()->Add(scalar); }
+
+std::shared_ptr<Tensor> operator-(const std::shared_ptr<Tensor> &t, float scalar) { return t->Add(-scalar); }
+
+std::shared_ptr<Tensor> operator-(const std::shared_ptr<Tensor> &t) { return t->Neg(); }
+
 std::shared_ptr<Tensor> operator*(const std::shared_ptr<Tensor> &t1, const std::shared_ptr<Tensor> &t2) {
     return t1->Mul(t2);
 }
@@ -327,6 +424,16 @@ std::shared_ptr<Tensor> operator*(const std::shared_ptr<Tensor> &t1, const std::
 std::shared_ptr<Tensor> operator*(float scalar, const std::shared_ptr<Tensor> &t) { return t->Mul(scalar); }
 
 std::shared_ptr<Tensor> operator*(const std::shared_ptr<Tensor> &t, float scalar) { return t->Mul(scalar); }
+
+std::shared_ptr<Tensor> operator/(const std::shared_ptr<Tensor> &t1, const std::shared_ptr<Tensor> &t2) {
+    return t1->Div(t2);
+}
+
+std::shared_ptr<Tensor> operator/(float scalar, const std::shared_ptr<Tensor> &t) {
+    return t->Reciprocal()->Mul(scalar);
+}
+
+std::shared_ptr<Tensor> operator/(const std::shared_ptr<Tensor> &t, float scalar) { return t->Mul(1.0f / scalar); }
 
 void Tensor::SaveAsNpy(const std::string &path) const {
     // TODO(zbl): support other dtypes
@@ -345,7 +452,8 @@ void Tensor::SaveAsNpy(const std::string &path) const {
 #ifdef USE_CUDA
     else if (GetDevice().Type() == DeviceType::kCUDA) {
         // If on CUDA, copy back to host
-        cudaError_t err = cudaMemcpyAsync(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost, 0);
+        cudaDeviceSynchronize();
+        cudaError_t err = cudaMemcpy(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost);
         CHECK_EQ(err, cudaSuccess) << "cudaMemcpy failed: " << cudaGetErrorString(err);
     }
 #endif
@@ -464,7 +572,7 @@ void Tensor::Print(std::ostream &os) const {
 #ifdef USE_CUDA
     else if (GetDevice().Type() == DeviceType::kCUDA) {
         cudaDeviceSynchronize();
-        cudaError_t err = cudaMemcpyAsync(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost, 0);
+        cudaError_t err = cudaMemcpy(host_buffer.data(), DataPtr(), num_bytes, cudaMemcpyDeviceToHost);
         CHECK_EQ(err, cudaSuccess) << "cudaMemcpy failed: " << cudaGetErrorString(err);
     }
 #endif

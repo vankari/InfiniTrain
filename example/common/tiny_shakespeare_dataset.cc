@@ -1,4 +1,4 @@
-#include "example/gpt2/dataset.h"
+#include "example/common/tiny_shakespeare_dataset.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -83,8 +83,10 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
 
     std::variant<std::vector<uint16_t>, std::vector<int32_t>> buffer;
     if (text_file.type == TinyShakespeareType::kUINT16) {
+        CHECK_LE(sequence_length, 1024); // GPT-2: max_seq_length = 1024
         buffer = std::vector<uint16_t>(num_sequences * sequence_length);
     } else if (text_file.type == TinyShakespeareType::kUINT32) {
+        CHECK_LE(sequence_length, 8192); // LLaMA-3: max_seq_length = 8192
         buffer = std::vector<int32_t>(num_sequences * sequence_length);
     }
     std::visit(
@@ -100,7 +102,6 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
 TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size_t sequence_length)
     : text_file_(ReadTinyShakespeareFile(filepath, sequence_length)), sequence_length_(sequence_length),
       sequence_size_in_bytes_(sequence_length * sizeof(int64_t)), num_samples_(text_file_.dims[0] - 1) {
-    CHECK_LE(sequence_length, 1024); // GPT-2: max_seq_length = 1024
     CHECK_EQ(text_file_.dims[1], sequence_length_);
     CHECK_EQ(static_cast<int>(text_file_.tensor.Dtype()), static_cast<int>(DataType::kINT64));
 }

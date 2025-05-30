@@ -110,10 +110,6 @@ void Profiler::EndRecord(const std::string &name, DeviceType device) {
     host_us = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start).count();
     cpu_timing_map_.erase(name);
 
-    if (device == DeviceType::kCPU) {
-        device_us = host_us;
-    }
-
     RecordKernel(name, device_str, host_us, device_us, peak_mem_mb);
 }
 

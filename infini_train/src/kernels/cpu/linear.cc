@@ -122,9 +122,11 @@ std::shared_ptr<Tensor> LinearForward(const std::shared_ptr<Tensor> &input, cons
     CHECK_EQ(in_features, weight_dims[transpose ? 1 : 0]);
     const int out_features = weight_dims[transpose ? 0 : 1];
 
-    const auto &bias_dims = bias->Dims();
-    CHECK_EQ(bias_dims.size(), 1);
-    CHECK_EQ(bias_dims[0], out_features);
+    if (bias) {
+        const auto &bias_dims = bias->Dims();
+        CHECK_EQ(bias_dims.size(), 1);
+        CHECK_EQ(bias_dims[0], out_features);
+    }
 
     auto output_dims = input_dims;
     *output_dims.rbegin() = out_features;
@@ -135,7 +137,10 @@ std::shared_ptr<Tensor> LinearForward(const std::shared_ptr<Tensor> &input, cons
     } else {
         output->EigenMatrix() = input->EigenMatrix() * weight->EigenMatrix();
     }
-    output->EigenMatrix().rowwise() += bias->EigenVector();
+
+    if (bias) {
+        output->EigenMatrix().rowwise() += bias->EigenVector();
+    }
 
     return output;
 }
@@ -168,7 +173,10 @@ LinearBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
 
     auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32);
     auto grad_weight = std::make_shared<Tensor>(weight_dims, DataType::kFLOAT32);
-    auto grad_bias = std::make_shared<Tensor>(std::vector<int64_t>{out_features}, DataType::kFLOAT32);
+    std::shared_ptr<Tensor> grad_bias = nullptr;
+    if (bias) {
+        grad_bias = std::make_shared<Tensor>(std::vector<int64_t>{out_features}, DataType::kFLOAT32);
+    }
 
     if (transpose) {
         grad_input->EigenMatrix() = grad_output->EigenMatrix() * weight->EigenMatrix();
@@ -177,7 +185,9 @@ LinearBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
         grad_input->EigenMatrix() = grad_output->EigenMatrix() * weight->EigenMatrix().transpose();
         grad_weight->EigenMatrix() = input->EigenMatrix().transpose() * grad_output->EigenMatrix();
     }
-    grad_bias->EigenVector() = grad_output->EigenMatrix().colwise().sum();
+    if (bias) {
+        grad_bias->EigenVector() = grad_output->EigenMatrix().colwise().sum();
+    }
 
     return {grad_input, grad_weight, grad_bias};
 }
