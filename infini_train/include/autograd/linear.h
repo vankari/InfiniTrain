@@ -20,5 +20,6 @@ public:
 
 private:
     int64_t out_features_ = 0;
+    bool bias_ = true;
 };
 } // namespace infini_train::autograd

@@ -2,13 +2,10 @@
 
 #include <vector>
 
+#include "infini_train/include/autograd/accumulate.h"
 #include "infini_train/include/device.h"
-#include "infini_train/include/kernels/cpu/accumulate_grad.h"
+#include "infini_train/include/dispatcher.h"
 #include "infini_train/include/tensor.h"
-
-#ifdef USE_CUDA
-#include "infini_train/include/kernels/cuda/accumulate_grad.h"
-#endif
 
 namespace infini_train {
 Optimizer::Optimizer(const std::vector<std::shared_ptr<Tensor>> &params) : params_(params) {}
@@ -24,21 +21,9 @@ SGD::SGD(const std::vector<std::shared_ptr<Tensor>> &params, float learning_rate
 
 void SGD::Step() {
     for (auto param : params_) {
-        switch (param->GetDevice().Type()) {
-        case DeviceType::kCPU: {
-            kernels::cpu::AccumulateGrad(param->grad(), -learning_rate_, param);
-            break;
-        }
-#ifdef USE_CUDA
-        case DeviceType::kCUDA: {
-            kernels::cuda::AccumulateGrad(param->grad(), -learning_rate_, param);
-            break;
-        }
-#endif
-        default:
-            LOG(FATAL) << "Unsupported device type: " << param->GetDevice();
-            break;
-        }
+        auto device = param->GetDevice()->Type();
+        auto accumulate_function = std::make_shared<infini_train::autograd::AccumulateGrad>(param, -learning_rate_);
+        accumulate_function->BackwardPartial(param->grad(), 0);
     }
 }
 
@@ -48,8 +33,13 @@ Adam::Adam(const std::vector<std::shared_ptr<Tensor>> &params, float learning_ra
     for (const auto &param : params_) {
         m_.emplace_back(std::make_shared<Tensor>(param->Dims(), param->Dtype(), param->GetDevice()));
         v_.emplace_back(std::make_shared<Tensor>(param->Dims(), param->Dtype(), param->GetDevice()));
-        m_.back()->Fill<float>(0.0f);
-        v_.back()->Fill<float>(0.0f);
+        DispatchFunc<INFINI_ALL_TYPES>(
+            param->Dtype(),
+            [this]<typename T>() {
+                m_.back()->Fill<T>(0);
+                v_.back()->Fill<T>(0);
+            },
+            "CUDA Adam");
     }
 }
 
@@ -62,21 +52,9 @@ void Adam::Step() {
         auto &m = m_[i];
         auto &v = v_[i];
 
-        switch (param->GetDevice().Type()) {
-        case DeviceType::kCPU: {
-            kernels::cpu::AdamAccumulateGrad(grad, param, m, v, learning_rate_, beta1_, beta2_, eps_, t_);
-            break;
-        }
-#ifdef USE_CUDA
-        case DeviceType::kCUDA: {
-            kernels::cuda::AdamAccumulateGrad(grad, param, m, v, learning_rate_, beta1_, beta2_, eps_, t_);
-            break;
-        }
-#endif
-        default:
-            LOG(FATAL) << "Unsupported device type: " << param->GetDevice();
-            break;
-        }
+        auto device = param->GetDevice()->Type();
+        auto kernel = Dispatcher::Instance().GetKernel({device, "AdamAccumulateGrad"});
+        kernel.Call<void>(grad, param, m, v, learning_rate_, beta1_, beta2_, eps_, t_);
     }
 }
 } // namespace optimizers

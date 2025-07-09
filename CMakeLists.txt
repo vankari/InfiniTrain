@@ -1,4 +1,7 @@
 option(USE_CUDA "Support NVIDIA CUDA" OFF)
+option(PROFILE_MODE "ENABLE PROFILE MODE" OFF)
+option(USE_OMP "Use OpenMP as backend for Eigen" ON)
+option(USE_NCCL "Build project for distributed running" OFF)
 cmake_minimum_required(VERSION 3.28)
 
 project(infini_train VERSION 0.3.0 LANGUAGES CXX)
@@ -22,57 +25,64 @@ add_subdirectory(third_party/glog)
 include_directories(${glog_SOURCE_DIR}/src)
 
 # Add eigen
-find_package(OpenMP REQUIRED)
+if(USE_OMP)
+    find_package(OpenMP REQUIRED)
+endif()
 # find_package(OpenBLAS REQUIRED)
 # include_directories(${OpenBLAS_INCLUDE_DIR})
 add_subdirectory(third_party/eigen)
 include_directories(${PROJECT_SOURCE_DIR}/third_party/eigen)
 # add_definitions(-DEIGEN_USE_BLAS)
 
+include_directories(${PROJECT_SOURCE_DIR})
+file(GLOB_RECURSE SRC ${PROJECT_SOURCE_DIR}/infini_train/src/*.cc)
+list(FILTER SRC EXCLUDE REGEX ".*kernels/cpu/.*")
+
+if(PROFILE_MODE)
+    add_compile_definitions(PROFILE_MODE=1)
+endif()
+
+file (GLOB_RECURSE CPU_KERNELS ${PROJECT_SOURCE_DIR}/infini_train/src/kernels/cpu/*.cc)
+add_library(infini_train_cpu_kernels STATIC ${CPU_KERNELS})
+target_link_libraries(infini_train_cpu_kernels glog Eigen3::Eigen)
+if(USE_OMP)
+    target_link_libraries(infini_train_cpu_kernels OpenMP::OpenMP_CXX)
+endif()
+
 if(USE_CUDA)
     add_compile_definitions(USE_CUDA=1)
     enable_language(CUDA)
-    include(FindCUDAToolkit)
+    find_package(CUDAToolkit REQUIRED)
+    include_directories(${CUDAToolkit_INCLUDE_DIRS})
 
     # enable CUDA-related compilation options
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda --expt-relaxed-constexpr")
-
-    include_directories(${PROJECT_SOURCE_DIR})
-    file(GLOB_RECURSE SRC ${PROJECT_SOURCE_DIR}/infini_train/src/*.cc)
-    file(GLOB_RECURSE CUDA_SRC ${PROJECT_SOURCE_DIR}/infini_train/src/*.cu)
-    list(APPEND SRC ${CUDA_SRC})
+    file(GLOB_RECURSE CUDA_KERNELS ${PROJECT_SOURCE_DIR}/infini_train/src/*.cu)
+    add_library(infini_train_cuda_kernels STATIC ${CUDA_KERNELS})
+    set_target_properties(infini_train_cuda_kernels PROPERTIES CUDA_ARCHITECTURES "75;80")
+    target_link_libraries(infini_train_cuda_kernels glog CUDA::cudart CUDA::cublas CUDA::cuda_driver)
 
     add_library(infini_train STATIC ${SRC})
-    set_target_properties(infini_train PROPERTIES CUDA_ARCHITECTURES "70;80")
-    target_link_libraries(infini_train glog gflags CUDA::cudart CUDA::cublas Eigen3::Eigen)
+    target_link_libraries(infini_train glog gflags "-Wl,--whole-archive" infini_train_cpu_kernels infini_train_cuda_kernels "-Wl,--no-whole-archive")
 
-    # Examples
-    add_executable(mnist example/mnist/main.cc example/mnist/dataset.cc example/mnist/net.cc)
-    target_link_libraries(mnist glog gflags infini_train Eigen3::Eigen)
-
-    add_executable(gpt2 example/gpt2/main.cc example/gpt2/dataset.cc example/gpt2/net.cc)
-    target_link_libraries(gpt2 glog gflags infini_train Eigen3::Eigen)
+    if (USE_NCCL)
+        message(STATUS "Add USE_NCCL, use NCCL with CUDA")
+        list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+        find_package(NCCL REQUIRED)
+        add_compile_definitions(USE_NCCL=1)
+        target_link_libraries(infini_train nccl)
+    endif()
 else()
-    include_directories(${PROJECT_SOURCE_DIR})
-    file(GLOB_RECURSE SRC ${PROJECT_SOURCE_DIR}/infini_train/src/*.cc)
-
     add_library(infini_train STATIC ${SRC})
-    target_link_libraries(infini_train glog gflags Eigen3::Eigen)
-
-    # Examples
-    add_executable(mnist example/mnist/main.cc example/mnist/dataset.cc example/mnist/net.cc)
-    target_link_libraries(mnist glog gflags infini_train Eigen3::Eigen)
-
-    add_executable(gpt2 example/gpt2/main.cc example/gpt2/dataset.cc example/gpt2/net.cc)
-    target_link_libraries(gpt2 glog gflags infini_train Eigen3::Eigen)
-
-    # OpenBLAS
-    # target_link_libraries(infini_train ${OpenBLAS_LIBRARIES})
-    # target_link_libraries(mnist ${OpenBLAS_LIBRARIES})
-    # target_link_libraries(gpt2 ${OpenBLAS_LIBRARIES})
-
-    # OpenMP
-    target_link_libraries(infini_train OpenMP::OpenMP_CXX)
-    target_link_libraries(mnist OpenMP::OpenMP_CXX)
-    target_link_libraries(gpt2 OpenMP::OpenMP_CXX)
+    target_link_libraries(infini_train glog gflags "-Wl,--whole-archive" infini_train_cpu_kernels "-Wl,--no-whole-archive")
 endif()
+
+# Examples
+add_executable(mnist example/mnist/main.cc example/mnist/dataset.cc example/mnist/net.cc)
+target_link_libraries(mnist infini_train)
+
+add_executable(gpt2 example/gpt2/main.cc example/common/tiny_shakespeare_dataset.cc example/common/utils.cc example/gpt2/net.cc example/common/tokenizer.cc)
+target_link_libraries(gpt2 infini_train)
+
+add_executable(llama3 example/llama3/main.cc example/common/tiny_shakespeare_dataset.cc example/common/utils.cc example/llama3/net.cc example/common/tokenizer.cc)
+target_link_libraries(llama3 infini_train)

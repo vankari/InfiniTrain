@@ -1,30 +1,9 @@
-#include "infini_train/include/kernels/cuda/linear.h"
-
-#include <memory>
-#include <tuple>
-
 #include "cublas_v2.h"
-#include "glog/logging.h"
+#include <cub/block/block_reduce.cuh>
 
-#include "infini_train/include/tensor.h"
+#include "infini_train/include/common/cuda/common_cuda.cuh"
 
 namespace infini_train::kernels::cuda {
-
-#define CUDA_CHECK(call)                                                                                               \
-    do {                                                                                                               \
-        cudaError_t status = call;                                                                                     \
-        if (status != cudaSuccess) {                                                                                   \
-            LOG(FATAL) << "CUDA Error: " << cudaGetErrorString(status) << " at " << __FILE__ << ":" << __LINE__;       \
-        }                                                                                                              \
-    } while (0)
-
-#define CUBLAS_CHECK(call)                                                                                             \
-    do {                                                                                                               \
-        cublasStatus_t status = call;                                                                                  \
-        if (status != CUBLAS_STATUS_SUCCESS) {                                                                         \
-            LOG(FATAL) << "CUBLAS Error: " << cublasGetStatusString(status) << " at " << __FILE__ << ":" << __LINE__;  \
-        }                                                                                                              \
-    } while (0)
 
 std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &other) {
     /*
@@ -47,13 +26,17 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
         CHECK_EQ(input_dims[i], other_dims[i]) << "Batch dims must match";
     }
 
+    auto dtype = input->Dtype();
     std::vector<int64_t> output_dims = input_dims;
     output_dims[output_dims.size() - 1] = n;
-    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
+    auto output = std::make_shared<Tensor>(output_dims, dtype, input->GetDevice());
 
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
     const float alpha = 1.0f, beta = 0.0f;
     cublasHandle_t handle;
+    // TODO(zbl): create handle only once
     CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSetStream(handle, cuda_device->Stream()));
 
     // cuBLAS is colmun-major
     // output = input * other --> output.T = other.T * input.T
@@ -68,10 +51,22 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
     int64_t stride_b = k * m;
     int64_t stride_c = m * n;
     // NOTE(zbl): the last cublasGemmAlgo_t param has no effect on GPU arch >= sm_80(Ampere)
-    CUBLAS_CHECK(cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, other->DataPtr(),
-                                            CUDA_R_32F, lda, stride_a, input->DataPtr(), CUDA_R_32F, ldb, stride_b,
-                                            &beta, output->DataPtr(), CUDA_R_32F, ldc, stride_c, bs, CUDA_R_32F,
-                                            CUBLAS_GEMM_DEFAULT));
+
+    switch (dtype) {
+        DISPATCH_CASE(WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                          handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, other->DataPtr(), CUDA_R_32F, lda,
+                          stride_a, input->DataPtr(), CUDA_R_32F, ldb, stride_b, &beta, output->DataPtr(), CUDA_R_32F,
+                          ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                      DataType::kFLOAT32)
+        DISPATCH_CASE(WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                          handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, other->DataPtr(), CUDA_R_16BF, lda,
+                          stride_a, input->DataPtr(), CUDA_R_16BF, ldb, stride_b, &beta, output->DataPtr(), CUDA_R_16BF,
+                          ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                      DataType::kBFLOAT16)
+    default:
+        LOG_UNSUPPORTED_DTYPE(dtype, "CUDA MatmulForward");
+    }
+
     CUBLAS_CHECK(cublasDestroy(handle));
     return output;
 }
@@ -104,14 +99,23 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
         CHECK_EQ(input_dims[i], grad_output_dims[i]) << "Batch dims must match";
     }
 
-    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    grad_input->Fill<float>(0.0f);
-    grad_other->Fill<float>(0.0f);
+    auto dtype = input->Dtype();
+    auto grad_input = std::make_shared<Tensor>(input_dims, dtype, grad_output->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other_dims, dtype, grad_output->GetDevice());
 
+    DispatchFunc<DataType::kFLOAT32, DataType::kBFLOAT16>(
+        dtype,
+        [=]<typename T>() {
+            grad_input->Fill<T>(0);
+            grad_other->Fill<T>(0);
+        },
+        "CUDA MatmulBackward");
+
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
     const float alpha = 1.0f, beta = 0.0f;
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSetStream(handle, cuda_device->Stream()));
 
     {
         // cuBLAS is colmun-major
@@ -124,10 +128,19 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
         const int64_t stride_a = k * n;
         const int64_t stride_b = n * m;
         const int64_t stride_c = m * k;
-        CUBLAS_CHECK(cublasGemmStridedBatchedEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, k, m, n, &alpha, other->DataPtr(),
-                                                CUDA_R_32F, lda, stride_a, grad_output->DataPtr(), CUDA_R_32F, ldb,
-                                                stride_b, &beta, grad_input->DataPtr(), CUDA_R_32F, ldc, stride_c, bs,
-                                                CUDA_R_32F, CUBLAS_GEMM_DEFAULT));
+        switch (dtype) {
+            DISPATCH_CASE(WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                              handle, CUBLAS_OP_T, CUBLAS_OP_N, k, m, n, &alpha, other->DataPtr(), CUDA_R_32F, lda,
+                              stride_a, grad_output->DataPtr(), CUDA_R_32F, ldb, stride_b, &beta, grad_input->DataPtr(),
+                              CUDA_R_32F, ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                          DataType::kFLOAT32)
+            DISPATCH_CASE(
+                WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                    handle, CUBLAS_OP_T, CUBLAS_OP_N, k, m, n, &alpha, other->DataPtr(), CUDA_R_16BF, lda, stride_a,
+                    grad_output->DataPtr(), CUDA_R_16BF, ldb, stride_b, &beta, grad_input->DataPtr(), CUDA_R_16BF, ldc,
+                    stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                DataType::kBFLOAT16)
+        }
     }
 
     {
@@ -136,22 +149,30 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
         // C = A * B.T ==> grad_other.T[*, n, k] = grad_output.T[*, n, m] * input[*, m, k]
         // C = grad_other.T[*, n, k]
         // A = grad_output.T[*, n, m]
-        // B = input.T[*, m, k]
-        const int lda = n, ldb = m, ldc = n;
+        // B = input.T[*, k, m]
+        const int lda = n, ldb = k, ldc = n;
         const int64_t stride_a = n * m;
-        const int64_t stride_b = m * k;
+        const int64_t stride_b = k * m;
         const int64_t stride_c = n * k;
-        CUBLAS_CHECK(cublasGemmStridedBatchedEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, k, m, &alpha,
-                                                grad_output->DataPtr(), CUDA_R_32F, lda, stride_a, input->DataPtr(),
-                                                CUDA_R_32F, ldb, stride_b, &beta, grad_other->DataPtr(), CUDA_R_32F,
-                                                ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));
+        switch (dtype) {
+            DISPATCH_CASE(WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                              handle, CUBLAS_OP_N, CUBLAS_OP_T, n, k, m, &alpha, grad_output->DataPtr(), CUDA_R_32F,
+                              lda, stride_a, input->DataPtr(), CUDA_R_32F, ldb, stride_b, &beta, grad_other->DataPtr(),
+                              CUDA_R_32F, ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                          DataType::kFLOAT32)
+            DISPATCH_CASE(WRAP(CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+                              handle, CUBLAS_OP_N, CUBLAS_OP_T, n, k, m, &alpha, grad_output->DataPtr(), CUDA_R_16BF,
+                              lda, stride_a, input->DataPtr(), CUDA_R_16BF, ldb, stride_b, &beta, grad_other->DataPtr(),
+                              CUDA_R_16BF, ldc, stride_c, bs, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));),
+                          DataType::kBFLOAT16)
+        }
     }
 
     CUBLAS_CHECK(cublasDestroy(handle));
     return {grad_input, grad_other};
 }
 
-__global__ void BiasCopyKernel(float *output, const float *bias, int bs, int out_features) {
+template <typename T> __global__ void BiasCopyKernel(T *output, const T *bias, int bs, int out_features) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= bs * out_features) {
         return;
@@ -188,55 +209,89 @@ std::shared_ptr<Tensor> LinearForward(const std::shared_ptr<Tensor> &input, cons
     //   output: (bs, out_features)
     const int64_t out_features = weight_dims[transpose ? 0 : 1];
 
+    auto dtype = input->Dtype();
     auto output_dims = input_dims;
     *output_dims.rbegin() = out_features;
-    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
+    auto output = std::make_shared<Tensor>(output_dims, dtype, input->GetDevice());
+
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
 
     if (bias) {
         CHECK_EQ(bias->Dims().size(), 1);
         CHECK_EQ(bias->Dims()[0], out_features);
         int threads_per_block = 256;
         int num_blocks = (bs * out_features + threads_per_block - 1) / threads_per_block;
-        BiasCopyKernel<<<num_blocks, threads_per_block>>>(
-            static_cast<float *>(output->DataPtr()), static_cast<const float *>(bias->DataPtr()), bs, out_features);
+
+        DispatchFunc<DataType::kFLOAT32, DataType::kBFLOAT16>(
+            dtype,
+            [=]<typename T>() {
+                BiasCopyKernel<<<num_blocks, threads_per_block, 0, cuda_device->Stream()>>>(
+                    static_cast<T *>(output->DataPtr()), static_cast<const T *>(bias->DataPtr()), bs, out_features);
+            },
+            "CUDA LinearForward");
     } else {
-        output->Fill<float>(0.0f);
+        DispatchFunc<DataType::kFLOAT32, DataType::kBFLOAT16>(
+            input->Dtype(), [=]<typename T>() { output->Fill<T>(0); }, "CUDA LinearForward");
     }
 
     const float alpha = 1.0f;
     const float beta = 1.0f;
+    auto trans_a = transpose ? CUBLAS_OP_T : CUBLAS_OP_N;
+    auto trans_b = CUBLAS_OP_N;
+    auto lda = transpose ? in_features : out_features;
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
-    // TODO(zbl): use cublasSgemv if possible
-    if (transpose) {
-        // weight is [out_features, in_features] here
-
-        // output = input * weight.T --> output.T = weight * input.T
-        // C = output.T[out_features, bs]
-        // A = weight.T[in_features, out_features]
-        // B = input.T[in_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, out_features, bs, in_features, &alpha,
-                                 static_cast<const float *>(weight->DataPtr()), in_features,
-                                 static_cast<const float *>(input->DataPtr()), in_features, &beta,
-                                 static_cast<float *>(output->DataPtr()), out_features));
-    } else {
-        // output = input * weight --> output.T =  weight.T * input.T
-        // C = output.T[out_features, bs]
-        // A = weight.T[out_features, in_features]
-        // B = input.T[in_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, out_features, bs, in_features, &alpha,
-                                 static_cast<const float *>(weight->DataPtr()), out_features,
-                                 static_cast<const float *>(input->DataPtr()), in_features, &beta,
-                                 static_cast<float *>(output->DataPtr()), out_features));
+    CUBLAS_CHECK(cublasSetStream(handle, cuda_device->Stream()));
+    // TODO(zbl): use cublasSgemv if possible for convenience and simplicity
+    //
+    // - if a is transposed:
+    // weight is [out_features, in_features] here
+    // output = input * weight.T --> output.T = weight * input.T
+    // C = output.T[out_features, bs]
+    // A = weight.T[in_features, out_features]
+    // B = input.T[in_features, bs]
+    //
+    // - if a is not transposed:
+    // output = input * weight --> output.T =  weight.T * input.T
+    // C = output.T[out_features, bs]
+    // A = weight.T[out_features, in_features]
+    // B = input.T[in_features, bs]
+    switch (input->Dtype()) {
+        DISPATCH_CASE(WRAP({
+                          CUBLAS_CHECK(cublasSgemm(handle, trans_a, trans_b, out_features, bs, in_features, &alpha,
+                                                   static_cast<const float *>(weight->DataPtr()), lda,
+                                                   static_cast<const float *>(input->DataPtr()), in_features, &beta,
+                                                   static_cast<float *>(output->DataPtr()), out_features));
+                      }),
+                      DataType::kFLOAT32)
+        DISPATCH_CASE(WRAP({
+                          CUBLAS_CHECK(cublasGemmEx(handle, trans_a, trans_b, out_features, bs, in_features, &alpha,
+                                                    weight->DataPtr(), CUDA_R_16BF, lda, input->DataPtr(), CUDA_R_16BF,
+                                                    in_features, &beta, output->DataPtr(), CUDA_R_16BF, out_features,
+                                                    CUDA_R_32F, CUBLAS_GEMM_DEFAULT));
+                      }),
+                      DataType::kBFLOAT16)
     }
     CUBLAS_CHECK(cublasDestroy(handle));
     return output;
 }
 
-__global__ void set_ones(float *data, int num_elements) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < num_elements) {
-        data[idx] = 1.0f;
+template <int BLOCK_SIZE, typename T>
+__global__ void ReduceColumnsKernel(const T *__restrict__ input, T *__restrict__ output, int num_rows, int num_cols) {
+    using BlockReduce = cub::BlockReduce<float, BLOCK_SIZE>;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    int row = blockIdx.x;
+    float sum = 0.0f;
+
+    for (int col = threadIdx.x; col < num_cols; col += blockDim.x) {
+        sum += common::cuda::Cast<float>(input[row * num_cols + col]);
+    }
+
+    float reduced = BlockReduce(temp_storage).Sum(sum);
+
+    if (threadIdx.x == 0) {
+        output[row] = reduced;
     }
 }
 
@@ -248,84 +303,114 @@ LinearBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     const int64_t bs = std::accumulate(input_dims.rbegin() + 1, input_dims.rend(), 1, std::multiplies<int64_t>{});
     const int64_t in_features = *input_dims.rbegin();
 
+    auto dtype = input->Dtype();
     const auto &weight_dims = weight->Dims();
     CHECK_EQ(weight_dims.size(), 2);
     CHECK_EQ(in_features, weight_dims[transpose ? 1 : 0]);
     CHECK_EQ(out_features, weight_dims[transpose ? 0 : 1]);
 
-    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    auto grad_weight = std::make_shared<Tensor>(weight_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    grad_input->Fill<float>(0.0f);
-    grad_weight->Fill<float>(0.0f);
+    auto grad_input = std::make_shared<Tensor>(input_dims, dtype, grad_output->GetDevice());
+    auto grad_weight = std::make_shared<Tensor>(weight_dims, dtype, grad_output->GetDevice());
     std::shared_ptr<Tensor> grad_bias = nullptr;
-    if (bias) {
-        grad_bias = std::make_shared<Tensor>(std::vector<int64_t>{out_features}, DataType::kFLOAT32,
-                                             grad_output->GetDevice());
-        grad_bias->Fill<float>(0.0f);
-    }
 
+    auto initialize_gradients = [&](auto zero_value, DataType dtype) {
+        using T = decltype(zero_value);
+        grad_input->Fill<T>(zero_value);
+        grad_weight->Fill<T>(zero_value);
+        if (bias) {
+            grad_bias = std::make_shared<Tensor>(std::vector<int64_t>{out_features}, dtype, grad_output->GetDevice());
+            grad_bias->Fill<T>(zero_value);
+        }
+    };
+    DispatchFunc<DataType::kFLOAT32, DataType::kBFLOAT16>(
+        dtype, [=]<typename T>() { initialize_gradients(T(0), dtype); }, "CUDA LinearBackward");
+
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
     float alpha = 1.0f;
     float beta = 0.0f;
+    auto trans_a1 = transpose ? CUBLAS_OP_N : CUBLAS_OP_T;
+    auto trans_b1 = CUBLAS_OP_N;
+    auto lda1 = transpose ? in_features : out_features;
+    auto trans_a2 = CUBLAS_OP_N;
+    auto trans_b2 = CUBLAS_OP_T;
+    int m2 = transpose ? in_features : out_features;
+    int n2 = transpose ? out_features : in_features;
+    const void *a2 = transpose ? input->DataPtr() : grad_output->DataPtr();
+    const void *b2 = transpose ? grad_output->DataPtr() : input->DataPtr();
+    auto lda2 = transpose ? in_features : out_features;
+    auto ldb2 = transpose ? out_features : in_features;
+    auto ldc2 = transpose ? in_features : out_features;
+
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
+    CUBLAS_CHECK(cublasSetStream(handle, cuda_device->Stream()));
 
-    // TODO(zbl): use cublasSgemv if possible
-    if (transpose) {
-        // weight is [out_features, in_features] here
-
-        // d_input = d_output * weight --> d_input.T = weight.T * d_output.T
-        // C = d_input.T[in_features, bs]
-        // A = weight.T[in_features, out_features]
-        // B = d_output.T[out_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, in_features, bs, out_features, &alpha,
-                                 static_cast<const float *>(weight->DataPtr()), in_features,
-                                 static_cast<const float *>(grad_output->DataPtr()), out_features, &beta,
-                                 static_cast<float *>(grad_input->DataPtr()), in_features));
-
-        // d_weight = d_output.T * input --> d_weight.T = input.T * d_output
-        // C = d_weight.T[in_features, out_features]
-        // A = input.T[in_features, bs]
-        // B = d_output.T[out_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, in_features, out_features, bs, &alpha,
-                                 static_cast<const float *>(input->DataPtr()), in_features,
-                                 static_cast<const float *>(grad_output->DataPtr()), out_features, &beta,
-                                 static_cast<float *>(grad_weight->DataPtr()), in_features));
-    } else {
-        // weight is [in_features, out_features] here
-
-        // d_input = d_output * weight.T --> d_input.T = weight * d_output.T
-        // C = d_input.T[in_features, bs]
-        // A = weight.T[out_features, in_features]
-        // B = d_output.T[out_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, in_features, bs, out_features, &alpha,
-                                 static_cast<const float *>(weight->DataPtr()), out_features,
-                                 static_cast<const float *>(grad_output->DataPtr()), out_features, &beta,
-                                 static_cast<float *>(grad_input->DataPtr()), in_features));
-
-        // d_weight = input.T * d_output --> d_weight.T = d_output.T * input
-        // C = d_weight.T[out_features, in_features]
-        // A = d_output.T[out_features, bs]
-        // B = input.T[in_features, bs]
-        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, out_features, in_features, bs, &alpha,
-                                 static_cast<const float *>(grad_output->DataPtr()), out_features,
-                                 static_cast<const float *>(input->DataPtr()), in_features, &beta,
-                                 static_cast<float *>(grad_weight->DataPtr()), out_features));
-    }
-
-    // d_bias = \sum_i(i=0, bs-1) d_output[i]
-    // TODO(dcj): use thrust::fill or reduce kernel do this
-    if (bias) {
-        auto ones = std::make_shared<Tensor>(std::vector<int64_t>{bs}, DataType::kFLOAT32, grad_output->GetDevice());
-        float *ones_ptr = static_cast<float *>(ones->DataPtr());
-
-        int threads_per_block = 256;
-        int num_blocks = (bs + threads_per_block - 1) / threads_per_block;
-
-        set_ones<<<num_blocks, threads_per_block>>>(ones_ptr, bs);
-
-        CUBLAS_CHECK(cublasSgemv(
-            handle, CUBLAS_OP_N, out_features, bs, &alpha, static_cast<const float *>(grad_output->DataPtr()),
-            out_features, static_cast<float *>(ones_ptr), 1, &beta, static_cast<float *>(grad_bias->DataPtr()), 1));
+    switch (input->Dtype()) {
+        // TODO(zbl): use cublasSgemv if possible
+        DISPATCH_CASE(WRAP({
+                          // - if transpose:
+                          // weight is [out_features, in_features] here
+                          // d_input = d_output * weight --> d_input.T = weight.T * d_output.T
+                          // C = d_input.T[in_features, bs]
+                          // A = weight.T[in_features, out_features]
+                          // B = d_output.T[out_features, bs]
+                          //
+                          // - if not transpose:
+                          // weight is [in_features, out_features] here
+                          // d_input = d_output * weight.T --> d_input.T = weight * d_output.T
+                          // C = d_input.T[in_features, bs]
+                          // A = weight.T[out_features, in_features]
+                          // B = d_output.T[out_features, bs]
+                          CUBLAS_CHECK(cublasSgemm(handle, trans_a1, trans_b1, in_features, bs, out_features, &alpha,
+                                                   static_cast<const float *>(weight->DataPtr()), lda1,
+                                                   static_cast<const float *>(grad_output->DataPtr()), out_features,
+                                                   &beta, static_cast<float *>(grad_input->DataPtr()), in_features));
+                          // - if transpose:
+                          // d_weight = d_output.T * input --> d_weight.T = input.T * d_output
+                          // C = d_weight.T[in_features, out_features]
+                          // A = input.T[in_features, bs]
+                          // B = d_output.T[out_features, bs]
+                          //
+                          // - if not transpose:
+                          // d_weight = input.T * d_output --> d_weight.T = d_output.T * input
+                          // C = d_weight.T[out_features, in_features]
+                          // A = d_output.T[out_features, bs]
+                          // B = input.T[in_features, bs]
+                          CUBLAS_CHECK(cublasSgemm(handle, trans_a2, trans_b2, m2, n2, bs, &alpha,
+                                                   static_cast<const float *>(a2), lda2, static_cast<const float *>(b2),
+                                                   ldb2, &beta, static_cast<float *>(grad_weight->DataPtr()), ldc2));
+                          // d_bias = \sum_i(i=0, bs-1) d_output[i]
+                          // TODO(dcj): use thrust::fill or reduce kernel do this
+                          if (bias) {
+                              constexpr int BLOCK_SIZE = 256;
+                              int threads_per_block = BLOCK_SIZE;
+                              int num_blocks = out_features;
+                              ReduceColumnsKernel<BLOCK_SIZE>
+                                  <<<num_blocks, threads_per_block, 0, cuda_device->Stream()>>>(
+                                      static_cast<const float *>(grad_output->DataPtr()),
+                                      static_cast<float *>(grad_bias->DataPtr()), out_features, bs);
+                          }
+                      }),
+                      DataType::kFLOAT32)
+        DISPATCH_CASE(WRAP({
+                          CUBLAS_CHECK(cublasGemmEx(handle, trans_a1, trans_b1, in_features, bs, out_features, &alpha,
+                                                    weight->DataPtr(), CUDA_R_16BF, lda1, grad_output->DataPtr(),
+                                                    CUDA_R_16BF, out_features, &beta, grad_input->DataPtr(),
+                                                    CUDA_R_16BF, in_features, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));
+                          CUBLAS_CHECK(cublasGemmEx(handle, trans_a2, trans_b2, m2, n2, bs, &alpha, a2, CUDA_R_16BF,
+                                                    lda2, b2, CUDA_R_16BF, ldb2, &beta, grad_weight->DataPtr(),
+                                                    CUDA_R_16BF, ldc2, CUDA_R_32F, CUBLAS_GEMM_DEFAULT));
+                          if (bias) {
+                              constexpr int BLOCK_SIZE = 256;
+                              int threads_per_block = BLOCK_SIZE;
+                              int num_blocks = out_features;
+                              ReduceColumnsKernel<BLOCK_SIZE>
+                                  <<<num_blocks, threads_per_block, 0, cuda_device->Stream()>>>(
+                                      static_cast<const nv_bfloat16 *>(grad_output->DataPtr()),
+                                      static_cast<nv_bfloat16 *>(grad_bias->DataPtr()), out_features, bs);
+                          }
+                      }),
+                      DataType::kBFLOAT16)
     }
 
     CUBLAS_CHECK(cublasDestroy(handle));
@@ -333,3 +418,13 @@ LinearBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     return {grad_input, grad_weight, grad_bias};
 }
 } // namespace infini_train::kernels::cuda
+
+#define REGISTER_CUDA_LINEAR_KERNEL(kernel_name)                                                                       \
+    REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
+
+REGISTER_CUDA_LINEAR_KERNEL(MatmulForward)
+REGISTER_CUDA_LINEAR_KERNEL(MatmulBackward)
+REGISTER_CUDA_LINEAR_KERNEL(LinearForward)
+REGISTER_CUDA_LINEAR_KERNEL(LinearBackward)
+
+#undef REGISTER_CUDA_LINEAR_KERNEL

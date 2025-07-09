@@ -28,7 +28,7 @@ std::shared_ptr<Tensor> Normal(const std::shared_ptr<Tensor> &tensor, float mean
     std::normal_distribution<float> dis(mean, std);
     std::generate(buffer.begin(), buffer.end(), [&]() { return generator ? dis(generator.value()) : dis(gen); });
 
-    switch (tensor->GetDevice().Type()) {
+    switch (tensor->GetDevice()->Type()) {
     case DeviceType::kCPU: {
         memcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float));
         break;
@@ -36,12 +36,12 @@ std::shared_ptr<Tensor> Normal(const std::shared_ptr<Tensor> &tensor, float mean
 #ifdef USE_CUDA
     case DeviceType::kCUDA: {
         // TODO(dcj): maybe use async API later?
-        cudaMemcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice, 0);
         break;
     }
 #endif
     default: {
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice().Type());
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice()->Type());
         break;
     }
     }
@@ -117,7 +117,7 @@ std::shared_ptr<Tensor> Uniform(const std::shared_ptr<Tensor> &tensor, float a, 
     std::uniform_real_distribution<float> dis(a, b);
     std::generate(buffer.begin(), buffer.end(), [&]() { return generator ? dis(generator.value()) : dis(gen); });
 
-    switch (tensor->GetDevice().Type()) {
+    switch (tensor->GetDevice()->Type()) {
     case DeviceType::kCPU: {
         memcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float));
         break;
@@ -125,12 +125,12 @@ std::shared_ptr<Tensor> Uniform(const std::shared_ptr<Tensor> &tensor, float a, 
 #ifdef USE_CUDA
     case DeviceType::kCUDA: {
         // TODO(dcj): maybe use async API later?
-        cudaMemcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice, 0);
         break;
     }
 #endif
     default: {
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice().Type());
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice()->Type());
         break;
     }
     }
@@ -143,7 +143,7 @@ std::shared_ptr<Tensor> Ones(const std::shared_ptr<Tensor> &tensor) {
     const int64_t num_elements = tensor->NumElements();
     std::vector<float> buffer(num_elements, 1.0f);
 
-    switch (tensor->GetDevice().Type()) {
+    switch (tensor->GetDevice()->Type()) {
     case DeviceType::kCPU: {
         memcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float));
         break;
@@ -151,12 +151,12 @@ std::shared_ptr<Tensor> Ones(const std::shared_ptr<Tensor> &tensor) {
 #ifdef USE_CUDA
     case DeviceType::kCUDA: {
         // TODO(dcj): maybe use async API later?
-        cudaMemcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice, 0);
         break;
     }
 #endif
     default: {
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice().Type());
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice()->Type());
         break;
     }
     }
@@ -169,7 +169,7 @@ std::shared_ptr<Tensor> Zeros(const std::shared_ptr<Tensor> &tensor) {
     const int64_t num_elements = tensor->NumElements();
     std::vector<float> buffer(num_elements, 0.0f);
 
-    switch (tensor->GetDevice().Type()) {
+    switch (tensor->GetDevice()->Type()) {
     case DeviceType::kCPU: {
         memcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float));
         break;
@@ -177,12 +177,12 @@ std::shared_ptr<Tensor> Zeros(const std::shared_ptr<Tensor> &tensor) {
 #ifdef USE_CUDA
     case DeviceType::kCUDA: {
         // TODO(dcj): maybe use async API later?
-        cudaMemcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(tensor->DataPtr(), buffer.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice, 0);
         break;
     }
 #endif
     default: {
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice().Type());
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(tensor->GetDevice()->Type());
         break;
     }
     }
@@ -200,14 +200,14 @@ std::shared_ptr<Tensor> Zeros(const std::shared_ptr<Tensor> &tensor) {
     case DATA_TYPE: {                                                                                                  \
         std::vector<TYPE> buffer(num_elements);                                                                        \
         std::iota(buffer.begin(), buffer.end(), static_cast<TYPE>(start));                                             \
-        cudaMemcpy(tensor->DataPtr(), buffer.data(), num_elements * sizeof(TYPE), cudaMemcpyHostToDevice);             \
+        cudaMemcpyAsync(tensor->DataPtr(), buffer.data(), num_elements * sizeof(TYPE), cudaMemcpyHostToDevice, 0);     \
         break;                                                                                                         \
     }
 
-std::shared_ptr<Tensor> Arange(int64_t start, int64_t end, DataType dtype, Device device) {
+std::shared_ptr<Tensor> Arange(int64_t start, int64_t end, DataType dtype, const Device *device) {
     int64_t num_elements = end - start;
     auto tensor = std::make_shared<Tensor>(std::vector<int64_t>{num_elements}, dtype, device);
-    if (device == Device()) {
+    if (device->IsCPU()) {
         switch (dtype) {
             CASE(DataType::kUINT8, uint8_t)
             CASE(DataType::kINT8, int8_t)
@@ -236,8 +236,8 @@ std::shared_ptr<Tensor> Arange(int64_t start, int64_t end, DataType dtype, Devic
             CUDA_CASE(DataType::kINT32, int32_t)
             CUDA_CASE(DataType::kUINT64, uint64_t)
             CUDA_CASE(DataType::kINT64, int64_t)
-            // CUDA_CASE(DataType::kBFLOAT16, bf16)
-            // CUDA_CASE(DataType::kFLOAT16, fp16)
+            CUDA_CASE(DataType::kBFLOAT16, nv_bfloat16)
+            CUDA_CASE(DataType::kFLOAT16, half)
             CUDA_CASE(DataType::kFLOAT32, float)
             CUDA_CASE(DataType::kFLOAT64, double)
         default:
@@ -245,7 +245,7 @@ std::shared_ptr<Tensor> Arange(int64_t start, int64_t end, DataType dtype, Devic
             break;
         }
 #else
-        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(device.Type());
+        LOG(FATAL) << "Unsupported device type: " << static_cast<int>(device->Type());
 #endif
     }
     return tensor;

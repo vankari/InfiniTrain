@@ -1,148 +1,111 @@
-#include "infini_train/include/kernels/cuda/layernorm.h"
+#include <cub/block/block_reduce.cuh>
 
-#include <memory>
-#include <tuple>
-
-#include "glog/logging.h"
-
-#include "infini_train/include/tensor.h"
+#include "infini_train/include/common/cuda/common_cuda.cuh"
 
 namespace infini_train::kernels::cuda {
 
-#define CUDA_CHECK(call)                                                                                               \
-    do {                                                                                                               \
-        cudaError_t status = call;                                                                                     \
-        if (status != cudaSuccess) {                                                                                   \
-            LOG(FATAL) << "CUDA Error: " << cudaGetErrorString(status) << " at " << __FILE__ << ":" << __LINE__;       \
-        }                                                                                                              \
-    } while (0)
+template <int BLOCK_SIZE, typename T>
+__global__ void LayerNormForwardKernel(const T *input, const T *weight, const T *bias, float *mean_out, float *rstd_out,
+                                       T *output, float eps, int embed_dim) {
+    using BlockReduce = cub::BlockReduce<float, BLOCK_SIZE>;
+    __shared__ typename BlockReduce::TempStorage temp_storage_mean;
+    __shared__ typename BlockReduce::TempStorage temp_storage_rstd;
+    __shared__ float shared_mean;
+    __shared__ float shared_rstd;
 
-__global__ void LayerNormForwardKernel(const float *input, const float *weight, const float *bias, float *mean_out,
-                                       float *rstd_out, float *output, float eps, int batch_size, int max_seqlen,
-                                       int embed_dim) {
-    int idx = blockIdx.x; // token idx
-    const float *x = input + idx * embed_dim;
-    float *y = output + idx * embed_dim;
+    const int token_idx = blockIdx.x;
+    const T *x = input + token_idx * embed_dim;
+    T *y = output + token_idx * embed_dim;
 
-    extern __shared__ float smem[]; // smem[0:threadnum] for sum, next for sqsum
     float sum = 0.0f;
     float sqsum = 0.0f;
 
-    for (int i = threadIdx.x; i < embed_dim; i += blockDim.x) {
-        float val = x[i];
+    for (int i = threadIdx.x; i < embed_dim; i += BLOCK_SIZE) {
+        float val = common::cuda::Cast<float>(x[i]);
         sum += val;
         sqsum += val * val;
     }
 
-    // block reduce sum
-    smem[threadIdx.x] = sum;
-    __syncthreads();
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            smem[threadIdx.x] += smem[threadIdx.x + stride];
+    float total_sum = BlockReduce(temp_storage_mean).Sum(sum);
+    float total_sqsum = BlockReduce(temp_storage_rstd).Sum(sqsum);
+
+    if (threadIdx.x == 0) {
+        float mean = total_sum / embed_dim;
+        float var = total_sqsum / embed_dim - mean * mean;
+        float rstd = rsqrtf(var + eps);
+        shared_mean = mean;
+        shared_rstd = rstd;
+        if (mean_out) {
+            mean_out[token_idx] = mean;
         }
-        __syncthreads();
-    }
-    float mean = smem[0] / embed_dim;
-    if (threadIdx.x == 0 && mean_out) {
-        mean_out[idx] = mean;
+        if (rstd_out) {
+            rstd_out[token_idx] = rstd;
+        }
     }
     __syncthreads();
 
-    // block reduce sqsum
-    smem[threadIdx.x] = sqsum;
-    __syncthreads();
-    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            smem[threadIdx.x] += smem[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
-    float var = smem[0] / embed_dim - mean * mean;
-    float rstd = rsqrtf(var + eps);
-    if (threadIdx.x == 0 && rstd_out) {
-        rstd_out[idx] = rstd;
-    }
-    __syncthreads();
-
-    // normalize
-    for (int i = threadIdx.x; i < embed_dim; i += blockDim.x) {
-        float norm = (x[i] - mean) * rstd;
-        y[i] = norm * weight[i] + bias[i];
+    for (int i = threadIdx.x; i < embed_dim; i += BLOCK_SIZE) {
+        float norm = (common::cuda::Cast<float>(x[i]) - shared_mean) * shared_rstd;
+        y[i] = common::cuda::Cast<T>(norm * common::cuda::Cast<float>(weight[i]) + common::cuda::Cast<float>(bias[i]));
     }
 }
 
-std::shared_ptr<Tensor> LayerNormForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &weight,
-                                         const std::shared_ptr<Tensor> &bias, std::shared_ptr<Tensor> &mean,
-                                         std::shared_ptr<Tensor> &rstd, const float eps) {
+std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
+LayerNormForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &weight,
+                 const std::shared_ptr<Tensor> &bias, const float eps) {
     CHECK_EQ(input->Dims().size(), 3);
     CHECK_LE(input->Dims()[2], weight->Dims()[0]);
     CHECK_LE(input->Dims()[2], bias->Dims()[0]);
-    CHECK_EQ(mean, nullptr);
-    CHECK_EQ(rstd, nullptr);
 
     const int batch_size = input->Dims()[0];
     const int max_seqlen = input->Dims()[1];
     const int embed_dim = input->Dims()[2];
 
-    auto output = std::make_shared<Tensor>(input->Dims(), DataType::kFLOAT32, input->GetDevice());
-    mean = std::make_shared<Tensor>(std::vector<int64_t>{batch_size, max_seqlen}, DataType::kFLOAT32,
-                                    input->GetDevice());
-    rstd = std::make_shared<Tensor>(std::vector<int64_t>{batch_size, max_seqlen}, DataType::kFLOAT32,
-                                    input->GetDevice());
-    mean->Fill<float>(0.0f);
-    rstd->Fill<float>(0.0f);
+    auto dtype = input->Dtype();
 
-    int threads_per_block = 256;
+    auto output = std::make_shared<Tensor>(input->Dims(), dtype, input->GetDevice());
+    auto mean = std::make_shared<Tensor>(std::vector<int64_t>{batch_size, max_seqlen}, DataType::kFLOAT32,
+                                         input->GetDevice());
+    auto rstd = std::make_shared<Tensor>(std::vector<int64_t>{batch_size, max_seqlen}, DataType::kFLOAT32,
+                                         input->GetDevice());
+
+    constexpr int BLOCK_SIZE = 256;
+    int threads_per_block = BLOCK_SIZE;
     int num_blocks = batch_size * max_seqlen;
-    int shared_mem_size = threads_per_block * sizeof(float);
 
-    LayerNormForwardKernel<<<num_blocks, threads_per_block, shared_mem_size>>>(
-        static_cast<const float *>(input->DataPtr()), static_cast<const float *>(weight->DataPtr()),
-        static_cast<const float *>(bias->DataPtr()), static_cast<float *>(mean->DataPtr()),
-        static_cast<float *>(rstd->DataPtr()), static_cast<float *>(output->DataPtr()), eps, batch_size, max_seqlen,
-        embed_dim);
-    return output;
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
+    DispatchFunc<INFINI_ALL_FLOATING_TYPES>(
+        dtype,
+        [=]<typename T>() {
+            mean->Fill<float>(0);
+            rstd->Fill<float>(0);
+            LayerNormForwardKernel<BLOCK_SIZE><<<num_blocks, threads_per_block, 0, cuda_device->Stream()>>>(
+                static_cast<const T *>(input->DataPtr()), static_cast<const T *>(weight->DataPtr()),
+                static_cast<const T *>(bias->DataPtr()), static_cast<float *>(mean->DataPtr()),
+                static_cast<float *>(rstd->DataPtr()), static_cast<T *>(output->DataPtr()), eps, embed_dim);
+        },
+        "CUDA LayerNormForward");
+
+    return {output, mean, rstd};
 }
 
-// Helper function for warp/block-wide reduction
-__inline__ __device__ float BlockReduceSum(float val) {
-    static __shared__ float shared_sum[32]; // assuming <= 1024 threads
-
-    int lane = threadIdx.x % 32;
-    int warp_id = threadIdx.x / 32;
-
-    // Warp reduction
-    for (int offset = 16; offset > 0; offset /= 2) { val += __shfl_down_sync(0xffffffff, val, offset); }
-
-    // Write reduced warp result to shared memory
-    if (lane == 0) {
-        shared_sum[warp_id] = val;
-    }
-
-    __syncthreads();
-
-    // Final reduction among warps
-    val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared_sum[lane] : 0.0f;
-    if (warp_id == 0) {
-        for (int offset = 16; offset > 0; offset /= 2) { val += __shfl_down_sync(0xffffffff, val, offset); }
-    }
-    return val;
-}
-
-__global__ void LayerNormBackwardKernel(const float *__restrict__ input, const float *__restrict__ grad_output,
+template <int BLOCK_SIZE, typename T>
+__global__ void LayerNormBackwardKernel(const T *__restrict__ input, const T *__restrict__ grad_output,
                                         const float *__restrict__ mean, const float *__restrict__ rstd,
-                                        const float *__restrict__ weight, float *__restrict__ grad_input,
-                                        float *__restrict__ grad_weight, float *__restrict__ grad_bias, int embed_dim) {
-    extern __shared__ float shared[]; // shared[0] = dnorm_mean, shared[1] = dnorm_norm_mean
+                                        const T *__restrict__ weight, T *__restrict__ grad_input,
+                                        T *__restrict__ grad_weight, T *__restrict__ grad_bias, int embed_dim) {
+    using BlockReduce = cub::BlockReduce<float, BLOCK_SIZE>;
+    __shared__ typename BlockReduce::TempStorage temp_storage_mean;
+    __shared__ typename BlockReduce::TempStorage temp_storage_norm;
+    __shared__ float shared_mean;
+    __shared__ float shared_norm;
 
     int tid = threadIdx.x;
     int token_idx = blockIdx.x;
-    int stride = blockDim.x;
 
-    const float *input_ptr = input + token_idx * embed_dim;
-    const float *grad_output_ptr = grad_output + token_idx * embed_dim;
-    float *grad_input_ptr = grad_input + token_idx * embed_dim;
+    const T *input_ptr = input + token_idx * embed_dim;
+    const T *grad_output_ptr = grad_output + token_idx * embed_dim;
+    T *grad_input_ptr = grad_input + token_idx * embed_dim;
 
     float mean_val = mean[token_idx];
     float rstd_val = rstd[token_idx];
@@ -150,50 +113,32 @@ __global__ void LayerNormBackwardKernel(const float *__restrict__ input, const f
     float dnorm_mean = 0.f;
     float dnorm_norm_mean = 0.f;
 
-    // Step 1: accumulate dnorm_mean and dnorm_norm_mean
-    for (int i = tid; i < embed_dim; i += stride) {
-        float gi = grad_output_ptr[i];
-        float wi = weight[i];
-        float xi = input_ptr[i];
-        float dnorm = wi * gi;
+    for (int i = tid; i < embed_dim; i += BLOCK_SIZE) {
+        float dnorm = common::cuda::Cast<float>(common::cuda::Mul(weight[i], grad_output_ptr[i]));
         dnorm_mean += dnorm;
-        dnorm_norm_mean += dnorm * (xi - mean_val);
+        dnorm_norm_mean += dnorm * (common::cuda::Cast<float>(input_ptr[i]) - mean_val);
     }
 
-    // Block-wide reductions
-    dnorm_mean = BlockReduceSum(dnorm_mean);
-    dnorm_norm_mean = BlockReduceSum(dnorm_norm_mean);
+    dnorm_mean = BlockReduce(temp_storage_mean).Sum(dnorm_mean);
+    dnorm_norm_mean = BlockReduce(temp_storage_norm).Sum(dnorm_norm_mean);
 
-    __syncthreads();
-
-    // Write reduced dnorm_mean and dnorm_norm_mean to shared memory
     if (tid == 0) {
-        shared[0] = dnorm_mean / embed_dim;
-        shared[1] = (dnorm_norm_mean / embed_dim) * rstd_val - shared[0] * mean_val * rstd_val;
+        float mean_d = dnorm_mean / embed_dim;
+        float norm_d = (dnorm_norm_mean / embed_dim) * rstd_val - mean_d * mean_val * rstd_val;
+        shared_mean = mean_d;
+        shared_norm = norm_d;
     }
     __syncthreads();
 
-    dnorm_mean = shared[0];
-    dnorm_norm_mean = shared[1];
+    for (int i = tid; i < embed_dim; i += BLOCK_SIZE) {
+        float norm = (common::cuda::Cast<float>(input_ptr[i]) - mean_val) * rstd_val;
+        float grad_output_val = common::cuda::Cast<float>(grad_output_ptr[i]);
 
-    // Step 2: compute grad_input and accumulate grad_weight, grad_bias per dimension
-    for (int i = tid; i < embed_dim; i += stride) {
-        float go = grad_output_ptr[i];
-        float w = weight[i];
-        float x = input_ptr[i];
+        grad_input_ptr[i] = common::cuda::Cast<T>(
+            (common::cuda::Cast<float>(weight[i]) * grad_output_val - shared_mean - norm * shared_norm) * rstd_val);
 
-        float norm = (x - mean_val) * rstd_val;
-
-        // compute grad_input
-        float dval = w * go;
-        dval -= dnorm_mean;
-        dval -= norm * dnorm_norm_mean;
-        dval *= rstd_val;
-        grad_input_ptr[i] = dval;
-
-        // accumulate grad_weight and grad_bias
-        atomicAdd(&grad_weight[i], go * norm);
-        atomicAdd(&grad_bias[i], go);
+        atomicAdd(&grad_weight[i], common::cuda::Cast<T>(grad_output_val * norm));
+        atomicAdd(&grad_bias[i], grad_output_ptr[i]);
     }
 }
 
@@ -201,26 +146,42 @@ std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>, std::shared_ptr<Ten
 LayerNormBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &weight,
                   const std::shared_ptr<Tensor> &bias, const std::shared_ptr<Tensor> &mean,
                   const std::shared_ptr<Tensor> &rstd, const std::shared_ptr<Tensor> &grad_output) {
-    const int batch = input->Dims()[0];
-    const int seqlen = input->Dims()[1];
+    const int batch_size = input->Dims()[0];
+    const int max_seqlen = input->Dims()[1];
     const int embed_dim = input->Dims()[2];
 
-    auto grad_input = std::make_shared<Tensor>(input->Dims(), DataType::kFLOAT32, grad_output->GetDevice());
-    auto grad_weight = std::make_shared<Tensor>(weight->Dims(), DataType::kFLOAT32, grad_output->GetDevice());
-    auto grad_bias = std::make_shared<Tensor>(bias->Dims(), DataType::kFLOAT32, grad_output->GetDevice());
-    grad_input->Fill<float>(0.0f);
-    grad_weight->Fill<float>(0.0f);
-    grad_bias->Fill<float>(0.0f);
+    auto dtype = input->Dtype();
+    auto grad_input = std::make_shared<Tensor>(input->Dims(), dtype, grad_output->GetDevice());
+    auto grad_weight = std::make_shared<Tensor>(weight->Dims(), dtype, grad_output->GetDevice());
+    auto grad_bias = std::make_shared<Tensor>(bias->Dims(), dtype, grad_output->GetDevice());
 
-    int num_blocks = batch * seqlen;
-    int threads_per_block = 256;
-    int shared_mem = 2 * sizeof(float); // for the block-wide `dnorm_mean` & `dnorm_norm_mean`
+    constexpr int BLOCK_SIZE = 256;
+    int threads_per_block = BLOCK_SIZE;
+    int num_blocks = batch_size * max_seqlen;
 
-    LayerNormBackwardKernel<<<num_blocks, threads_per_block, shared_mem>>>(
-        static_cast<const float *>(input->DataPtr()), static_cast<const float *>(grad_output->DataPtr()),
-        static_cast<const float *>(mean->DataPtr()), static_cast<const float *>(rstd->DataPtr()),
-        static_cast<const float *>(weight->DataPtr()), static_cast<float *>(grad_input->DataPtr()),
-        static_cast<float *>(grad_weight->DataPtr()), static_cast<float *>(grad_bias->DataPtr()), embed_dim);
+    const auto *cuda_device = dynamic_cast<const CudaDevice *>(input->GetDevice());
+    DispatchFunc<DataType::kFLOAT32, DataType::kBFLOAT16>(
+        dtype,
+        [=]<typename T>() {
+            grad_input->Fill<T>(0);
+            grad_weight->Fill<T>(0);
+            grad_bias->Fill<T>(0);
+            LayerNormBackwardKernel<BLOCK_SIZE><<<num_blocks, threads_per_block, 0, cuda_device->Stream()>>>(
+                static_cast<const T *>(input->DataPtr()), static_cast<const T *>(grad_output->DataPtr()),
+                static_cast<const float *>(mean->DataPtr()), static_cast<const float *>(rstd->DataPtr()),
+                static_cast<const T *>(weight->DataPtr()), static_cast<T *>(grad_input->DataPtr()),
+                static_cast<T *>(grad_weight->DataPtr()), static_cast<T *>(grad_bias->DataPtr()), embed_dim);
+        },
+        "CUDA LayerNormBackward");
+
     return {grad_input, grad_weight, grad_bias};
 }
 } // namespace infini_train::kernels::cuda
+
+#define REGISTER_CUDA_LAYERNORM_KERNEL(kernel_name)                                                                    \
+    REGISTER_KERNEL(infini_train::DeviceType::kCUDA, kernel_name, infini_train::kernels::cuda::kernel_name)
+
+REGISTER_CUDA_LAYERNORM_KERNEL(LayerNormForward)
+REGISTER_CUDA_LAYERNORM_KERNEL(LayerNormBackward)
+
+#undef REGISTER_CUDA_LAYERNORM_KERNEL
