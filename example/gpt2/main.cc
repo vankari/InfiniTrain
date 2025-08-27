@@ -9,6 +9,7 @@
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 
+#include "infini_train/include/autocast.h"
 #include "infini_train/include/dataloader.h"
 #include "infini_train/include/device.h"
 #include "infini_train/include/nn/functional.h"
@@ -192,6 +193,10 @@ int main(int argc, char *argv[]) {
         Profiler::Instance().SetTag("Step_" + std::to_string(step));
 #endif
         for (int micro_step = 0; micro_step < grad_accum_steps; ++micro_step) {
+            infini_train::AutocastGuard autocast_guard(device->Type(),
+                                                       DataType::kBFLOAT16); // enable autocast for the current step
+            // printf("%d, %d, %d\n", tls_autocast_context.enabled, tls_autocast_context.device_type,
+            //        tls_autocast_context.autocast_dtype);
             // (bs, seq_len), (bs, seq_len)
             auto [x, y] = *train_iter;
             // if we are trying to overfit a single batch, we reset the loader here by commenting out the line below
@@ -210,6 +215,10 @@ int main(int argc, char *argv[]) {
             LOG(INFO) << "finish model forward, start loss forward";
             auto loss = loss_fn.Forward({logits, y})[0];
             loss = loss / grad_accum_steps;
+
+            autocast_guard.Disable();
+            // printf("%d, %d, %d\n", tls_autocast_context.enabled, tls_autocast_context.device_type,
+            //        tls_autocast_context.autocast_dtype);
             LOG(INFO) << "finish loss forward";
             auto loss_cpu = loss->To(DeviceManager::Instance()->GetDefaultDevice());
             if (FLAGS_dtype == kDtypeFP32) {
