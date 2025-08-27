@@ -184,6 +184,28 @@ GPT2::GPT2(const GPT2Config &config) : config_(config) {
     });
 }
 
+std::vector<std::shared_ptr<nn::Module>> GPT2::GetPipelineLayers() {
+    auto &transformer = modules_[kTransformerLayerName];
+
+    std::vector<std::shared_ptr<nn::Module>> layers;
+
+    layers.push_back(transformer->mutable_module(kWTELayerName));
+    layers.push_back(transformer->mutable_module(kWPELayerName));
+
+    auto seq = std::dynamic_pointer_cast<nn::Sequential>(transformer->mutable_module(kHLayerName));
+    if (seq) {
+        for (const auto &sub_module : seq->modules()) { layers.push_back(sub_module); }
+    }
+
+    layers.push_back(transformer->mutable_module(kLnFLayerName));
+
+    layers.push_back(modules_[kLMHeadLayerName]);
+
+    return layers;
+}
+
+int GPT2::GetHiddenSize() const { return config_.n_embd; }
+
 std::vector<std::shared_ptr<infini_train::Tensor>>
 GPT2::Forward(const std::vector<std::shared_ptr<infini_train::Tensor>> &x) {
     // (bs, seq_len)

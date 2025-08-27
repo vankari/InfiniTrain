@@ -223,6 +223,79 @@ std::shared_ptr<Tensor> NcclGather(const std::vector<std::shared_ptr<Tensor>> &t
     NCCL_CHECK(ncclGroupEnd());
     return output;
 }
+
+void NcclAllReduce(const std::vector<std::vector<std::shared_ptr<Tensor>>> &tensors) {
+    // tensors: [num_devices][num_tensors_per_device]
+
+    std::vector<cudaStream_t> streams;
+    std::vector<ncclComm_t> comms;
+
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        auto device_ptr = dynamic_cast<const CudaDevice *>(tensors[i][0]->GetDevice());
+        streams.push_back(device_ptr->Stream());
+        comms.push_back(device_ptr->NcclComm());
+    }
+
+    size_t num_devices = tensors.size();
+    size_t num_tensors_per_device = tensors[0].size();
+
+    NCCL_CHECK(ncclGroupStart());
+
+    for (size_t j = 0; j < num_tensors_per_device; ++j) {
+        for (size_t i = 0; i < num_devices; ++i) {
+            const auto &tensor = tensors[i][j];
+            auto dtype = tensor->Dtype();
+            auto nccl_dtype = kNcclDtypeMap.at(dtype);
+            auto count = tensor->NumElements();
+            void *buffer = tensor->DataPtr();
+
+            NCCL_CHECK(ncclAllReduce(buffer, buffer, count, nccl_dtype, ncclSum, comms[i], streams[i]));
+        }
+    }
+    NCCL_CHECK(ncclGroupEnd());
+}
+
+std::shared_ptr<Tensor> NcclSend(std::shared_ptr<Tensor> tensor, int dest_rank)) {
+    dynamic_cast<const CudaDevice *>(tensor->GetDevice());
+    cudaStream_t stream = device_ptr->Stream();
+    ncclComm_t comm = device_ptr->NcclComm();
+
+    CHECK_NE(dest_rank, -1) << "Destination device not found in input tensors's devices";
+
+    NCCL_CHECK(ncclGroupStart());
+
+    auto dtype = tensor->Dtype();
+    auto nccl_dtype = kNcclDtypeMap.at(dtype);
+    auto count = tensor->NumElements();
+    void *buffer = tensor->DataPtr();
+
+    NCCL_CHECK(ncclSend(buffer, count, nccl_dtype, dest_rank, comm, stream));
+
+    NCCL_CHECK(ncclGroupEnd());
+
+    return tensor;
+}
+
+std::shared_ptr<Tensor> NcclRecv(std::shared_ptr<Tensor> tensor, int src_rank) {
+    dynamic_cast<const CudaDevice *>(tensor->GetDevice());
+    cudaStream_t stream = device_ptr->Stream();
+    ncclComm_t comm = device_ptr->NcclComm();
+
+    CHECK_NE(src_rank, -1) << "Source device not found in input devices";
+
+    NCCL_CHECK(ncclGroupStart());
+
+    auto dtype = tensor->Dtype();
+    auto nccl_dtype = kNcclDtypeMap.at(dtype);
+    auto count = tensor->NumElements();
+    void *buffer = tensor->DataPtr();
+
+    NCCL_CHECK(ncclRecv(buffer, count, nccl_dtype, src_rank, comm, stream));
+
+    NCCL_CHECK(ncclGroupEnd());
+
+    return tensor;
+}
 } // namespace infini_train::kernels::cuda
 
 #define REGISTER_CUDA_COMM_KERNEL(kernel_name)                                                                         \
@@ -233,7 +306,8 @@ REGISTER_CUDA_COMM_KERNEL(NcclScatter)
 REGISTER_CUDA_COMM_KERNEL(NcclGather)
 REGISTER_CUDA_COMM_KERNEL(NcclReduceAddCoalesced)
 REGISTER_CUDA_COMM_KERNEL(NcclAllReduce)
-
+REGISTER_CUDA_COMM_KERNEL(NcclSend)
+REGISTER_CUDA_COMM_KERNEL(NcclRecv)
 #undef REGISTER_CUDA_COMM_KERNEL
 
 #endif // USE_NCCL

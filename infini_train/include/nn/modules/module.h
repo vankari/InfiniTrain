@@ -44,6 +44,8 @@ public:
 
     std::unordered_map<std::string, std::shared_ptr<Tensor>> StateDict() const;
 
+    virtual std::vector<std::shared_ptr<Module>> GetPipelineLayers() { return {}; }
+
     virtual std::vector<std::shared_ptr<Tensor>> Forward(const std::vector<std::shared_ptr<Tensor>> &input_tensors) {
         LOG(FATAL) << "Forward function not implemented for this module";
         return {};
