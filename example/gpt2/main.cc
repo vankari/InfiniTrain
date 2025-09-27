@@ -16,6 +16,7 @@
 #include "infini_train/include/nn/parallel/distributed_data_parallel.h"
 #include "infini_train/include/nn/parallel_functional.h"
 #include "infini_train/include/optimizer.h"
+#include "infini_train/include/checkpoint.h"
 #ifdef PROFILE_MODE
 #include "infini_train/include/profiler.h"
 #endif
@@ -57,6 +58,11 @@ DEFINE_int32(
     "When set > 1, enables data parallelism with device=cuda on the specified number of visible CUDA devices.");
 // precision
 DEFINE_string(dtype, "float32", "precision used in training (float32/bfloat16)");
+
+// checkpoint save/load
+DEFINE_uint32(save_steps, 0, "save checkpoint every N steps");  
+DEFINE_string(resume_from, "", "path to checkpoint directory to resume from");  
+DEFINE_string(checkpoint_dir, "", "directory to save checkpoints");
 
 using namespace infini_train;
 
@@ -119,9 +125,19 @@ void Train(const nn::parallel::DistributedDataParallel::Rank &rank) {
     } else {
         model = GPT2::FromPretrained(kStrToModelType.at(FLAGS_model));
     }
-
     model->To(device);
 
+    auto optimizer = optimizers::SGD(model->Parameters(), FLAGS_learning_rate);  
+    int resume_step = 0;  
+    float best_loss = std::numeric_limits<float>::max();  
+  
+    if (!FLAGS_resume_from.empty() && rank.IsMainRank()) {  
+        auto [global_step, loaded_best_loss, last_lr] =   
+            Checkpoint::Load(FLAGS_resume_from, *model, optimizer);  
+        resume_step = global_step;  
+        best_loss = loaded_best_loss;  
+        LOG(INFO) << "Rank " << rank.thread_rank() << ": Resumed from checkpoint: step=" << global_step;  
+    }
     // select the data type
     // TODO(lzm): change to solely rely on the weight file info for determining the dtype when autocast is supported
     DataType dtype;
@@ -153,14 +169,13 @@ void Train(const nn::parallel::DistributedDataParallel::Rank &rank) {
     }
 
     // TODO(dcj): support more complex optimizer later
-    auto optimizer = optimizers::SGD(model->Parameters(), FLAGS_learning_rate);
 
     auto train_iter = train_loader.begin();
     auto loss_fn = nn::CrossEntropyLoss();
     loss_fn.To(device);
     LOG(INFO) << "Rank " << rank.thread_rank() << ": start training";
 
-    for (int step = 0; step < FLAGS_num_iteration + 1; ++step) {
+    for (int step = resume_step; step < FLAGS_num_iteration + 1; ++step) { {
         const bool last_step = step == FLAGS_num_iteration;
 
         const auto iter_start = std::chrono::high_resolution_clock::now();
@@ -235,7 +250,16 @@ void Train(const nn::parallel::DistributedDataParallel::Rank &rank) {
             LOG(ERROR) << std::format("step {:4d}/{} | train loss {:.6f} | lr {:.2e} | ({:.2f} ms | {:.0f} tok/s)",
                                       step + 1, FLAGS_num_iteration, lossf, FLAGS_learning_rate, duration_us / 1e3f,
                                       tps);
-
+            if (FLAGS_save_steps > 0 && (step + 1) % FLAGS_save_steps == 0) {  
+                if (lossf < best_loss) {  
+                    best_loss = lossf;  
+                }  
+          
+                std::string checkpoint_path = std::format("{}/checkpoint-{}",   
+                                                        FLAGS_checkpoint_dir, step + 1);  
+                Checkpoint::Save(checkpoint_path, *model, optimizer,   
+                                step + 1, best_loss, FLAGS_learning_rate);  
+            }  
             if ((step + 1) % FLAGS_freq_generate_txt == 0) {
                 if (!tokenizer) {
                     continue;
