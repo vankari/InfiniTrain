@@ -3,12 +3,14 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
-
+#include "infini_train/include/checkpoint.h" 
 namespace infini_train {
 class Tensor;
+class Checkpoint;
 }
 namespace infini_train {
 class Optimizer {
+    
 public:
     explicit Optimizer(const std::vector<std::shared_ptr<Tensor>> &params);
 
@@ -22,16 +24,18 @@ protected:
 
 namespace optimizers {
 class SGD : public Optimizer {
+    friend class infini_train::Checkpoint;
 public:
     SGD(const std::vector<std::shared_ptr<Tensor>> &params, float learning_rate);
 
     void Step() override;
 
 private:
-    const float learning_rate_ = 0.0;
+    float learning_rate_ = 0.0;
 };
 
 class Adam : public Optimizer {
+    friend class infini_train::Checkpoint;
 public:
     Adam(const std::vector<std::shared_ptr<Tensor>> &params, float learning_rate = 1e-3, float beta1 = 0.9,
          float beta2 = 0.999, float eps = 1e-8);
@@ -40,10 +44,10 @@ public:
 
 private:
     int64_t t_;
-    const float learning_rate_;
-    const float beta1_;
-    const float beta2_;
-    const float eps_;
+    float learning_rate_;
+    float beta1_;
+    float beta2_;
+    float eps_;
     std::vector<std::shared_ptr<Tensor>> m_;
     std::vector<std::shared_ptr<Tensor>> v_;
 };
