@@ -9,7 +9,13 @@
 #include "infini_train/include/nn/modules/module.h"  
 #include "infini_train/include/optimizer.h"  
 #include "infini_train/include/tensor.h"  
-  
+namespace infini_train {
+class Optimizer;
+namespace optimizers {
+class SGD;
+class Adam;
+}
+}
 namespace infini_train {  
   
 class Checkpoint {  

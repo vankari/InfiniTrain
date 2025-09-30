@@ -184,7 +184,7 @@ void Train(const nn::parallel::DistributedDataParallel::Rank &rank) {
     loss_fn.To(device);
     LOG(INFO) << "Rank " << rank.thread_rank() << ": start training";
 
-    for (int step = resume_step; step < FLAGS_num_iteration + 1; ++step) { {
+    for (int step = resume_step; step < FLAGS_num_iteration + 1; ++step) {
         const bool last_step = step == FLAGS_num_iteration;
 
         const auto iter_start = std::chrono::high_resolution_clock::now();
